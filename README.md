@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>🤖 Discord Bot Platform</h1>
+  <h1>🤖 SkyCodeHub Discord Bot</h1>
 </div>
 
 <div align="center">
@@ -12,7 +12,7 @@
 </div>
 
 <div align="center">
-  <strong>A production-ready Discord bot platform with 235+ commands, secure web dashboard, and comprehensive moderation tools</strong>
+  <strong>A production-ready SkyCodeHub Discord bot with 235+ commands, secure web dashboard, and comprehensive moderation tools</strong>
 </div>
 
 ---
