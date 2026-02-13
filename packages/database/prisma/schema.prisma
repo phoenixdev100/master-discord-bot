@@ -1,0 +1,619 @@
+// This is your Prisma schema file
+// Learn more: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// CORE MODELS
+// ============================================================================
+
+/// System-wide configuration
+model SystemConfig {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("system_config")
+}
+
+/// Discord Guild (Server)
+model Guild {
+  id          String    @id // Discord guild ID
+  name        String
+  icon        String?
+  ownerId     String // Discord user ID
+  isActive    Boolean   @default(true)
+  isPremium   Boolean   @default(false)
+  premiumTier Int       @default(0)
+  joinedAt    DateTime  @default(now())
+  leftAt      DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // Relations
+  users              GuildUser[]
+  modules            GuildModule[]
+  roles              Role[]
+  auditLogs          AuditLog[]
+  moderationCases    ModerationCase[]
+  warnings           Warning[]
+  autoModRules       AutoModRule[]
+  levelingConfig     LevelingConfig?
+  economyConfig      EconomyConfig?
+  tickets            Ticket[]
+  customCommands     CustomCommand[]
+  welcomeConfig      WelcomeConfig?
+  badWordFilters     BadWordFilter[]
+  linkScanner        LinkScanner?
+  imageScanner       ImageScanner?
+  raidProtection     RaidProtection?
+  channelLockdowns   ChannelLockdown[]
+  moderationAppeals  ModerationAppeal[]
+
+  @@map("guilds")
+}
+
+/// Discord User
+model User {
+  id            String   @id // Discord user ID
+  username      String
+  discriminator String
+  avatar        String?
+  bot           Boolean  @default(false)
+  isSuperAdmin  Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Relations
+  guilds              GuildUser[]
+  sessions            Session[]
+  auditLogs           AuditLog[]
+  moderationCases     ModerationCase[] @relation("ModeratorCases")
+  targetedCases       ModerationCase[] @relation("TargetCases")
+  userWarnings        Warning[]        @relation("UserWarnings")
+  moderatorWarnings   Warning[]        @relation("ModeratorWarnings")
+  reminders           Reminder[]
+  levelingData        LevelingData[]
+  economyData         EconomyData[]
+
+  @@map("users")
+}
+
+/// Guild-User relationship
+model GuildUser {
+  id        String   @id @default(cuid())
+  guildId   String
+  userId    String
+  nickname  String?
+  joinedAt  DateTime @default(now())
+  leftAt    DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  guild User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user  Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@unique([guildId, userId])
+  @@index([guildId])
+  @@index([userId])
+  @@map("guild_users")
+}
+
+/// Feature modules
+model Module {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  category    String
+  isDefault   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  guilds GuildModule[]
+
+  @@map("modules")
+}
+
+/// Guild-Module relationship (enabled modules per guild)
+model GuildModule {
+  id        String   @id @default(cuid())
+  guildId   String
+  moduleId  String
+  isEnabled Boolean  @default(true)
+  config    Json     @default("{}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  guild  Guild  @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  module Module @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+
+  @@unique([guildId, moduleId])
+  @@index([guildId])
+  @@index([moduleId])
+  @@map("guild_modules")
+}
+
+/// Custom roles
+model Role {
+  id          String   @id @default(cuid())
+  guildId     String
+  discordId   String // Discord role ID
+  name        String
+  color       Int?
+  position    Int      @default(0)
+  permissions String[] @default([])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  guild       Guild            @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  assignments RoleAssignment[]
+
+  @@unique([guildId, discordId])
+  @@index([guildId])
+  @@map("roles")
+}
+
+/// Role assignments
+model RoleAssignment {
+  id        String    @id @default(cuid())
+  roleId    String
+  userId    String
+  guildId   String
+  assignedBy String?
+  expiresAt DateTime?
+  createdAt DateTime  @default(now())
+
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@index([roleId])
+  @@index([userId])
+  @@index([guildId])
+  @@map("role_assignments")
+}
+
+/// Permission definitions
+model Permission {
+  id          String   @id @default(cuid())
+  resource    String
+  action      String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([resource, action])
+  @@map("permissions")
+}
+
+/// Audit logs
+model AuditLog {
+  id         String   @id @default(cuid())
+  guildId    String
+  userId     String
+  action     String
+  resource   String
+  resourceId String?
+  changes    Json?
+  metadata   Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([guildId])
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ============================================================================
+// MODERATION
+// ============================================================================
+
+/// Moderation cases
+model ModerationCase {
+  id          String    @id @default(cuid())
+  guildId     String
+  caseNumber  Int
+  type        String // "ban", "kick", "mute", "warn", etc.
+  targetId    String
+  moderatorId String
+  reason      String?
+  duration    Int? // Duration in seconds
+  expiresAt   DateTime?
+  isActive    Boolean   @default(true)
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  guild     Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  target    User  @relation("TargetCases", fields: [targetId], references: [id])
+  moderator User  @relation("ModeratorCases", fields: [moderatorId], references: [id])
+
+  @@unique([guildId, caseNumber])
+  @@index([guildId])
+  @@index([targetId])
+  @@index([moderatorId])
+  @@index([type])
+  @@index([isActive])
+  @@map("moderation_cases")
+}
+
+/// Warnings
+model Warning {
+  id          String    @id @default(cuid())
+  guildId     String
+  userId      String
+  reason      String
+  moderatorId String
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  guild     Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  user      User  @relation("UserWarnings", fields: [userId], references: [id], onDelete: Cascade)
+  moderator User  @relation("ModeratorWarnings", fields: [moderatorId], references: [id])
+
+  @@index([guildId])
+  @@index([userId])
+  @@index([moderatorId])
+  @@map("warnings")
+}
+
+/// Auto-moderation rules
+model AutoModRule {
+  id              String   @id @default(cuid())
+  guildId         String
+  name            String
+  type            String // "spam", "caps", "mentions", etc.
+  enabled         Boolean  @default(true)
+  threshold       Int?
+  action          String // "delete", "warn", "mute", etc.
+  duration        Int?
+  exemptRoles     String[] @default([])
+  exemptChannels  String[] @default([])
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@index([guildId])
+  @@index([enabled])
+  @@map("auto_mod_rules")
+}
+
+// ============================================================================
+// LEVELING & ECONOMY
+// ============================================================================
+
+/// Leveling configuration per guild
+model LevelingConfig {
+  id                String   @id @default(cuid())
+  guildId           String   @unique
+  isEnabled         Boolean  @default(true)
+  xpPerMessage      Int      @default(10)
+  xpCooldown        Int      @default(60) // Seconds
+  levelUpMessage    String?
+  levelUpChannel    String?
+  stackRoles        Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@map("leveling_config")
+}
+
+/// User leveling data
+model LevelingData {
+  id        String   @id @default(cuid())
+  guildId   String
+  userId    String
+  xp        Int      @default(0)
+  level     Int      @default(0)
+  messages  Int      @default(0)
+  lastXpAt  DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([guildId, userId])
+  @@index([guildId])
+  @@index([userId])
+  @@index([level])
+  @@map("leveling_data")
+}
+
+/// Economy configuration per guild
+model EconomyConfig {
+  id               String   @id @default(cuid())
+  guildId          String   @unique
+  isEnabled        Boolean  @default(true)
+  currencyName     String   @default("coins")
+  currencySymbol   String   @default("🪙")
+  startingBalance  Int      @default(100)
+  dailyReward      Int      @default(100)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@map("economy_config")
+}
+
+/// User economy data
+model EconomyData {
+  id             String    @id @default(cuid())
+  guildId        String
+  userId         String
+  balance        Int       @default(0)
+  bank           Int       @default(0)
+  lastDaily      DateTime?
+  lastWeekly     DateTime?
+  lastMonthly    DateTime?
+  dailyStreak    Int       @default(0)
+  lastWork       DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([guildId, userId])
+  @@index([guildId])
+  @@index([userId])
+  @@map("economy_data")
+}
+
+// ============================================================================
+// TICKETS
+// ============================================================================
+
+/// Support tickets
+model Ticket {
+  id          String    @id @default(cuid())
+  guildId     String
+  channelId   String    @unique
+  userId      String
+  subject     String
+  status      String    @default("open") // "open", "closed", "archived"
+  closedBy    String?
+  closedAt    DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  guild    Guild           @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  messages TicketMessage[]
+
+  @@index([guildId])
+  @@index([userId])
+  @@index([status])
+  @@map("tickets")
+}
+
+/// Ticket messages
+model TicketMessage {
+  id        String   @id @default(cuid())
+  ticketId  String
+  userId    String
+  content   String
+  createdAt DateTime @default(now())
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId])
+  @@map("ticket_messages")
+}
+
+// ============================================================================
+// CUSTOM COMMANDS
+// ============================================================================
+
+/// Custom commands
+model CustomCommand {
+  id          String   @id @default(cuid())
+  guildId     String
+  name        String
+  description String?
+  response    String
+  isEnabled   Boolean  @default(true)
+  usageCount  Int      @default(0)
+  createdBy   String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@unique([guildId, name])
+  @@index([guildId])
+  @@map("custom_commands")
+}
+
+// ============================================================================
+// WELCOME SYSTEM
+// ============================================================================
+
+/// Welcome configuration
+model WelcomeConfig {
+  id             String   @id @default(cuid())
+  guildId        String   @unique
+  isEnabled      Boolean  @default(true)
+  channelId      String?
+  message        String?
+  embedEnabled   Boolean  @default(false)
+  embedConfig    Json?
+  dmEnabled      Boolean  @default(false)
+  dmMessage      String?
+  autoRole       String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@map("welcome_config")
+}
+
+// ============================================================================
+// SESSIONS
+// ============================================================================
+
+/// User sessions
+model Session {
+  id           String   @id @default(cuid())
+  userId       String
+  token        String   @unique
+  refreshToken String?
+  expiresAt    DateTime
+  ipAddress    String?
+  userAgent    String?
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+// ============================================================================
+// PHASE 1 EXPANSION - AUTO-MODERATION
+// ============================================================================
+
+/// Bad word filters
+model BadWordFilter {
+  id        String   @id @default(cuid())
+  guildId   String
+  word      String
+  isRegex   Boolean  @default(false)
+  severity  String   @default("medium")
+  action    String   @default("delete")
+  isEnabled Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@index([guildId])
+  @@index([isEnabled])
+  @@map("bad_word_filters")
+}
+
+/// Link scanner
+model LinkScanner {
+  id              String   @id @default(cuid())
+  guildId         String   @unique
+  url             String
+  type            String // "whitelist" or "blacklist"
+  reason          String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@map("link_scanners")
+}
+
+/// Image scanner
+model ImageScanner {
+  id          String   @id @default(cuid())
+  guildId     String   @unique
+  isEnabled   Boolean  @default(false)
+  scanNSFW    Boolean  @default(true)
+  threshold   Float    @default(0.7)
+  action      String   @default("delete")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@map("image_scanners")
+}
+
+/// Raid protection
+model RaidProtection {
+  id                String   @id @default(cuid())
+  guildId           String   @unique
+  isEnabled         Boolean  @default(true)
+  joinThreshold     Int      @default(10)
+  joinWindow        Int      @default(10)
+  action            String   @default("kick")
+  lockdownOnRaid    Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@map("raid_protection")
+}
+
+/// Channel lockdowns
+model ChannelLockdown {
+  id         String    @id @default(cuid())
+  guildId    String
+  channelId  String
+  reason     String?
+  lockedBy   String
+  lockedAt   DateTime  @default(now())
+  unlockedAt DateTime?
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@index([guildId])
+  @@index([channelId])
+  @@map("channel_lockdowns")
+}
+
+/// Moderation appeals
+model ModerationAppeal {
+  id          String   @id @default(cuid())
+  guildId     String
+  caseNumber  Int
+  userId      String
+  reason      String
+  status      String   @default("pending") // "pending", "approved", "denied"
+  reviewedBy  String?
+  reviewedAt  DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@index([guildId])
+  @@index([userId])
+  @@index([status])
+  @@map("moderation_appeals")
+}
+
+// ============================================================================
+// REMINDERS
+// ============================================================================
+
+/// User reminders
+model Reminder {
+  id        String   @id @default(cuid())
+  userId    String
+  message   String
+  remindAt  DateTime
+  channelId String
+  guildId   String?
+  completed Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([remindAt])
+  @@index([completed])
+  @@map("reminders")
+}
