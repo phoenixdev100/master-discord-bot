@@ -1,0 +1,26 @@
+{
+    "name": "@discord-platform/database",
+    "version": "1.0.0",
+    "private": true,
+    "description": "Prisma ORM and database migrations",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "scripts": {
+        "build": "tsc",
+        "clean": "rm -rf dist",
+        "db:generate": "prisma generate",
+        "db:migrate": "prisma migrate dev",
+        "db:migrate:deploy": "prisma migrate deploy",
+        "db:studio": "prisma studio",
+        "db:seed": "tsx prisma/seed.ts"
+    },
+    "dependencies": {
+        "@prisma/client": "^5.8.0"
+    },
+    "devDependencies": {
+        "@types/node": "^20.10.6",
+        "prisma": "^5.8.0",
+        "tsx": "^4.7.0",
+        "typescript": "^5.3.3"
+    }
+}
