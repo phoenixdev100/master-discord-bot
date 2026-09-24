@@ -24,6 +24,7 @@ const envSchema = z.object({
     // Discord OAuth2
     DISCORD_CLIENT_ID: z.string().default(''),
     DISCORD_CLIENT_SECRET: z.string().default(''),
+    DISCORD_BOT_TOKEN: z.string().default(''),
     DISCORD_REDIRECT_URI: z.string().default('http://localhost:3000/api/auth/callback'),
 
     // Super Admin
@@ -32,6 +33,9 @@ const envSchema = z.object({
     // JWT
     JWT_SECRET: z.string().default('development-secret-key-change-in-production'),
     JWT_EXPIRES_IN: z.string().default('7d'),
+
+    // Internal API authentication (bot <-> API)
+    INTERNAL_API_KEY: z.string().default(''),
 
     // Rate Limiting
     RATE_LIMIT_WINDOW_MS: z.string().transform(Number).default('60000'),
