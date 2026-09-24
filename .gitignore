@@ -50,3 +50,6 @@ docker-compose.override.yml
 .cache/
 temp/
 tmp/
+
+# Command deploy fingerprint cache
+.deploy-hash
