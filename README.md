@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>🤖 SkyCodeHub Discord Bot</h1>
+  <h1>🤖 master Discord Bot</h1>
 </div>
 
 <div align="center">
@@ -12,7 +12,7 @@
 </div>
 
 <div align="center">
-  <strong>A production-ready SkyCodeHub Discord bot with 235+ commands, secure web dashboard, and comprehensive moderation tools</strong>
+  <strong>A production-ready master Discord bot with 235+ commands, secure web dashboard, and comprehensive moderation tools</strong>
 </div>
 
 ---
@@ -112,8 +112,8 @@ discord-bot-platform/
 
 ### 1. **Clone & Install**
 ```bash
-git clone https://github.com/phoenixdev100/skycodehub-discord-bot
-cd skycodehub-discord-bot
+git clone https://github.com/phoenixdev100/master-discord-bot
+cd master-discord-bot
 pnpm install
 ```
 
@@ -203,8 +203,8 @@ JWT_SECRET=your_jwt_secret_here
 
 ```bash
 # 1. Clone repository
-git clone https://github.com/phoenixdev100/skycodehub-discord-bot
-cd skycodehub-discord-bot
+git clone https://github.com/phoenixdev100/master-discord-bot
+cd master-discord-bot
 
 # 2. Install dependencies
 pnpm install
