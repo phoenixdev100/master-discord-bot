@@ -7,6 +7,7 @@
  */
 
 import { PrismaClient } from '@prisma/client';
+import { MODULE_DEFINITIONS } from '../src/modules';
 
 const prisma = new PrismaClient();
 
@@ -16,6 +17,14 @@ async function main() {
     // Seed core modules
     console.log('📦 Seeding modules...');
 
+    const modules = MODULE_DEFINITIONS.map((m) => ({
+        name: m.name,
+        description: m.description,
+        category: m.category,
+        isDefault: m.isDefault,
+    }));
+
+    /* Legacy module list removed — see MODULE_DEFINITIONS in src/modules.ts
     const modules = [
         {
             name: 'moderation',
@@ -178,6 +187,7 @@ async function main() {
             isCore: false,
         },
     ];
+    */
 
     for (const module of modules) {
         await prisma.module.upsert({
