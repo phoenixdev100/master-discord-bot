@@ -34,6 +34,7 @@ model Guild {
   isActive    Boolean   @default(true)
   isPremium   Boolean   @default(false)
   premiumTier Int       @default(0)
+  adminRoleId String? // Role whose members can use admin commands (set via dashboard)
   joinedAt    DateTime  @default(now())
   leftAt      DateTime?
   createdAt   DateTime  @default(now())
@@ -58,6 +59,9 @@ model Guild {
   raidProtection     RaidProtection?
   channelLockdowns   ChannelLockdown[]
   moderationAppeals  ModerationAppeal[]
+  autoRoles          AutoRole[]
+  reactionRoles      ReactionRole[]
+  afkStatuses        AfkStatus[]
 
   @@map("guilds")
 }
@@ -99,8 +103,8 @@ model GuildUser {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  guild User @relation(fields: [userId], references: [id], onDelete: Cascade)
-  user  Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([guildId, userId])
   @@index([guildId])
@@ -180,16 +184,22 @@ model RoleAssignment {
   @@map("role_assignments")
 }
 
-/// Permission definitions
+/// Permission definitions / per-user overrides
 model Permission {
   id          String   @id @default(cuid())
+  guildId     String
+  userId      String
   resource    String
   action      String
+  effect      String   @default("allow") // "allow" or "deny"
+  conditions  Json?
   description String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  @@unique([resource, action])
+  @@unique([guildId, userId, resource, action])
+  @@index([guildId])
+  @@index([userId])
   @@map("permissions")
 }
 
@@ -599,6 +609,43 @@ model ModerationAppeal {
 // REMINDERS
 // ============================================================================
 
+// ============================================================================
+// SERVER FEATURES
+// ============================================================================
+
+/// Auto-assigned roles for new members
+model AutoRole {
+  id        String   @id @default(cuid())
+  guildId   String
+  roleId    String
+  createdAt DateTime @default(now())
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@unique([guildId, roleId])
+  @@index([guildId])
+  @@map("auto_roles")
+}
+
+/// Reaction role bindings (message + emoji -> role)
+model ReactionRole {
+  id        String   @id @default(cuid())
+  guildId   String
+  messageId String
+  channelId String
+  title     String?
+  emoji     String
+  roleId    String
+  createdAt DateTime @default(now())
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@unique([guildId, messageId, emoji])
+  @@index([guildId])
+  @@index([messageId])
+  @@map("reaction_roles")
+}
+
 /// User reminders
 model Reminder {
   id        String   @id @default(cuid())
@@ -616,4 +663,18 @@ model Reminder {
   @@index([remindAt])
   @@index([completed])
   @@map("reminders")
+}
+
+/// Per-guild AFK status
+model AfkStatus {
+  id      String   @id @default(cuid())
+  guildId String
+  userId  String
+  reason  String   @default("AFK")
+  since   DateTime @default(now())
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@unique([guildId, userId])
+  @@map("afk_statuses")
 }

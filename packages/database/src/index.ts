@@ -7,6 +7,7 @@
 
 export { PrismaClient } from '@prisma/client';
 export * from '@prisma/client';
+export * from './modules';
 
 import { PrismaClient } from '@prisma/client';
 
