@@ -6,6 +6,7 @@
 
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import { sessionService } from '../services/session';
+import { env } from '../config/env';
 
 /**
  * Authenticated user attached to request
@@ -22,7 +23,16 @@ export interface AuthenticatedUser {
 declare module 'fastify' {
     interface FastifyRequest {
         user?: AuthenticatedUser;
+        isInternal?: boolean;
     }
+}
+
+/**
+ * Check whether the request carries the internal service API key
+ */
+function hasInternalKey(request: FastifyRequest): boolean {
+    const key = request.headers['x-api-key'];
+    return !!env.INTERNAL_API_KEY && key === env.INTERNAL_API_KEY;
 }
 
 /**
@@ -92,4 +102,22 @@ export async function optionalAuthenticate(
             isSuperAdmin: payload.isSuperAdmin,
         };
     }
+}
+
+/**
+ * Authentication for service-facing routes.
+ *
+ * Accepts either the internal API key (`x-api-key` header, used by the
+ * bot and the dashboard server-side proxy) or a valid user session JWT.
+ */
+export async function authenticateOrInternal(
+    request: FastifyRequest,
+    reply: FastifyReply
+): Promise<void> {
+    if (hasInternalKey(request)) {
+        request.isInternal = true;
+        return;
+    }
+
+    return authenticate(request, reply);
 }

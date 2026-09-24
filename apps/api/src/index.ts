@@ -22,6 +22,7 @@ import { economyRoutes } from './routes/economy';
 import { levelingRoutes } from './routes/leveling';
 import { remindersRoutes } from './routes/reminders';
 import { dashboardRoutes } from './routes/dashboard';
+import { featureRoutes } from './routes/features';
 
 async function main() {
     try {
@@ -61,6 +62,7 @@ async function main() {
         await app.register(levelingRoutes, { prefix: '/api' });
         await app.register(remindersRoutes, { prefix: '/api' });
         await app.register(dashboardRoutes, { prefix: '/api/dashboard' });
+        await app.register(featureRoutes, { prefix: '/api' });
 
         // Start server
         await app.listen({
@@ -78,24 +80,22 @@ async function main() {
     }
 }
 
-// Graceful shutdown
+// Graceful shutdown — bounded: force-exits after 3s even if a
+// connection close hangs (ioredis quit can stall mid-reconnect).
 async function shutdown(signal: string) {
-    logger.info(`${signal} received, shutting down gracefully...`);
+    logger.info(`${signal} received, shutting down...`);
+
+    const forceExit = setTimeout(() => process.exit(0), 3000);
+    forceExit.unref();
 
     try {
-        // Close database connection
-        await prisma.$disconnect();
-        logger.info('✅ Database disconnected');
-
-        // Close Redis connection
-        await redis.quit();
-        logger.info('✅ Redis disconnected');
+        // Forceful disconnects — never block the exit
+        redis.disconnect();
+        await prisma.$disconnect().catch(() => {});
 
         logger.info('👋 Shutdown complete');
+    } finally {
         process.exit(0);
-    } catch (error) {
-        logger.error({ error }, '❌ Error during shutdown');
-        process.exit(1);
     }
 }
 
