@@ -76,7 +76,7 @@ export class DiscordOAuthService {
             throw new Error(`Failed to exchange code: ${error}`);
         }
 
-        return response.json();
+        return response.json() as Promise<DiscordTokenResponse>;
     }
 
     /**
@@ -101,7 +101,7 @@ export class DiscordOAuthService {
             throw new Error(`Failed to refresh token: ${error}`);
         }
 
-        return response.json();
+        return response.json() as Promise<DiscordTokenResponse>;
     }
 
     /**
@@ -119,7 +119,7 @@ export class DiscordOAuthService {
             throw new Error(`Failed to get user: ${error}`);
         }
 
-        return response.json();
+        return response.json() as Promise<DiscordUser>;
     }
 
     /**
@@ -137,7 +137,7 @@ export class DiscordOAuthService {
             throw new Error(`Failed to get guilds: ${error}`);
         }
 
-        return response.json();
+        return response.json() as Promise<any[]>;
     }
 
     /**

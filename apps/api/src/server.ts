@@ -11,14 +11,14 @@ import rateLimit from '@fastify/rate-limit';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
 import { env, isDevelopment } from './config/env';
-import logger from './config/logger';
+import { loggerConfig } from './config/logger';
 import redis from './config/redis';
 import { errorHandler, notFoundHandler } from './middleware/error-handler';
 import { auditLog } from './middleware/audit';
 
 export async function createServer() {
     const app = Fastify({
-        logger: logger as any,
+        logger: loggerConfig,
         trustProxy: true,
         requestIdHeader: 'x-request-id',
         requestIdLogLabel: 'reqId',
