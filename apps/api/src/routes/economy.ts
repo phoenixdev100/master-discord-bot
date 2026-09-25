@@ -7,6 +7,8 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '../config/database';
+import { authenticateOrInternal } from '../middleware/auth';
+import { ensureGuild, ensureUser } from '../services/ensure';
 
 const PaySchema = z.object({
     recipientId: z.string(),
@@ -18,9 +20,14 @@ const TransactionSchema = z.object({
 });
 
 export async function economyRoutes(app: FastifyInstance) {
+    app.addHook('preHandler', authenticateOrInternal);
+
     // Get user economy data
     app.get('/guilds/:guildId/economy/:userId', async (request) => {
         const { guildId, userId } = request.params as { guildId: string; userId: string };
+
+        await ensureGuild(guildId);
+        await ensureUser(userId);
 
         let economyData = await prisma.economyData.findUnique({
             where: {
@@ -43,15 +50,21 @@ export async function economyRoutes(app: FastifyInstance) {
         }
 
         return {
-            balance: economyData.balance,
-            bank: economyData.bank,
-            total: economyData.balance + economyData.bank,
+            success: true,
+            data: {
+                balance: economyData.balance,
+                bank: economyData.bank,
+                total: economyData.balance + economyData.bank,
+            },
         };
     });
 
     // Claim daily reward
     app.post('/guilds/:guildId/economy/:userId/daily', async (request, reply) => {
         const { guildId, userId } = request.params as { guildId: string; userId: string };
+
+        await ensureGuild(guildId);
+        await ensureUser(userId);
 
         const economyData = await prisma.economyData.findUnique({
             where: {
@@ -120,15 +133,21 @@ export async function economyRoutes(app: FastifyInstance) {
         });
 
         return {
-            amount,
-            newBalance: updated.balance,
-            streak,
+            success: true,
+            data: {
+                amount,
+                newBalance: updated.balance,
+                streak,
+            },
         };
     });
 
     // Work for money
     app.post('/guilds/:guildId/economy/:userId/work', async (request, reply) => {
         const { guildId, userId } = request.params as { guildId: string; userId: string };
+
+        await ensureGuild(guildId);
+        await ensureUser(userId);
 
         const economyData = await prisma.economyData.findUnique({
             where: {
@@ -191,9 +210,12 @@ export async function economyRoutes(app: FastifyInstance) {
         });
 
         return {
-            amount,
-            job: job.name,
-            newBalance: updated.balance,
+            success: true,
+            data: {
+                amount,
+                job: job.name,
+                newBalance: updated.balance,
+            },
         };
     });
 
@@ -202,58 +224,50 @@ export async function economyRoutes(app: FastifyInstance) {
         const { guildId, userId } = request.params as { guildId: string; userId: string };
         const { recipientId, amount } = PaySchema.parse(request.body);
 
+        await ensureGuild(guildId);
+        await ensureUser(userId);
+        await ensureUser(recipientId);
+
         if (userId === recipientId) {
             return reply.code(400).send({ error: 'Cannot pay yourself' });
         }
 
-        const senderData = await prisma.economyData.findUnique({
-            where: {
-                guildId_userId: {
-                    guildId,
-                    userId,
-                },
-            },
-        });
+        // Atomic check-and-debit: the balance >= amount condition lives
+        // inside the UPDATE so two concurrent /pay calls can't both pass.
+        try {
+            await prisma.$transaction(async (tx) => {
+                const debit = await tx.economyData.updateMany({
+                    where: { guildId, userId, balance: { gte: amount } },
+                    data: { balance: { decrement: amount } },
+                });
+                if (debit.count === 0) throw new Error('INSUFFICIENT_FUNDS');
 
-        if (!senderData || senderData.balance < amount) {
-            return reply.code(400).send({ error: 'Insufficient funds' });
-        }
-
-        // Transfer money
-        await prisma.$transaction([
-            prisma.economyData.update({
-                where: {
-                    guildId_userId: {
-                        guildId,
-                        userId,
+                await tx.economyData.upsert({
+                    where: {
+                        guildId_userId: {
+                            guildId,
+                            userId: recipientId,
+                        },
                     },
-                },
-                data: {
-                    balance: {
-                        decrement: amount,
-                    },
-                },
-            }),
-            prisma.economyData.upsert({
-                where: {
-                    guildId_userId: {
-                        guildId,
+                    create: {
                         userId: recipientId,
+                        guildId,
+                        balance: amount,
+                        bank: 0,
                     },
-                },
-                create: {
-                    userId: recipientId,
-                    guildId,
-                    balance: amount,
-                    bank: 0,
-                },
-                update: {
-                    balance: {
-                        increment: amount,
+                    update: {
+                        balance: {
+                            increment: amount,
+                        },
                     },
-                },
-            }),
-        ]);
+                });
+            });
+        } catch (error: any) {
+            if (error?.message === 'INSUFFICIENT_FUNDS') {
+                return reply.code(400).send({ error: 'Insufficient funds' });
+            }
+            throw error;
+        }
 
         return { success: true };
     });
@@ -263,40 +277,32 @@ export async function economyRoutes(app: FastifyInstance) {
         const { guildId, userId } = request.params as { guildId: string; userId: string };
         const { amount } = TransactionSchema.parse(request.body);
 
-        const economyData = await prisma.economyData.findUnique({
-            where: {
-                guildId_userId: {
-                    guildId,
-                    userId,
-                },
+        await ensureGuild(guildId);
+        await ensureUser(userId);
+
+        // Atomic check-and-move: balance >= amount enforced inside the UPDATE
+        const debit = await prisma.economyData.updateMany({
+            where: { guildId, userId, balance: { gte: amount } },
+            data: {
+                balance: { decrement: amount },
+                bank: { increment: amount },
             },
         });
-
-        if (!economyData || economyData.balance < amount) {
+        if (debit.count === 0) {
             return reply.code(400).send({ error: 'Insufficient funds in wallet' });
         }
 
-        const updated = await prisma.economyData.update({
-            where: {
-                guildId_userId: {
-                    guildId,
-                    userId,
-                },
-            },
-            data: {
-                balance: {
-                    decrement: amount,
-                },
-                bank: {
-                    increment: amount,
-                },
-            },
+        const updated = await prisma.economyData.findUniqueOrThrow({
+            where: { guildId_userId: { guildId, userId } },
         });
 
         return {
-            deposited: amount,
-            newBalance: updated.balance,
-            newBank: updated.bank,
+            success: true,
+            data: {
+                deposited: amount,
+                newBalance: updated.balance,
+                newBank: updated.bank,
+            },
         };
     });
 
@@ -305,40 +311,32 @@ export async function economyRoutes(app: FastifyInstance) {
         const { guildId, userId } = request.params as { guildId: string; userId: string };
         const { amount } = TransactionSchema.parse(request.body);
 
-        const economyData = await prisma.economyData.findUnique({
-            where: {
-                guildId_userId: {
-                    guildId,
-                    userId,
-                },
+        await ensureGuild(guildId);
+        await ensureUser(userId);
+
+        // Atomic check-and-move: bank >= amount enforced inside the UPDATE
+        const debit = await prisma.economyData.updateMany({
+            where: { guildId, userId, bank: { gte: amount } },
+            data: {
+                bank: { decrement: amount },
+                balance: { increment: amount },
             },
         });
-
-        if (!economyData || economyData.bank < amount) {
+        if (debit.count === 0) {
             return reply.code(400).send({ error: 'Insufficient funds in bank' });
         }
 
-        const updated = await prisma.economyData.update({
-            where: {
-                guildId_userId: {
-                    guildId,
-                    userId,
-                },
-            },
-            data: {
-                bank: {
-                    decrement: amount,
-                },
-                balance: {
-                    increment: amount,
-                },
-            },
+        const updated = await prisma.economyData.findUniqueOrThrow({
+            where: { guildId_userId: { guildId, userId } },
         });
 
         return {
-            withdrawn: amount,
-            newBalance: updated.balance,
-            newBank: updated.bank,
+            success: true,
+            data: {
+                withdrawn: amount,
+                newBalance: updated.balance,
+                newBank: updated.bank,
+            },
         };
     });
 
@@ -374,13 +372,16 @@ export async function economyRoutes(app: FastifyInstance) {
         ]);
 
         return {
-            users: users.map(u => ({
-                ...u,
-                total: u.balance + u.bank,
-            })),
-            total,
-            page: Number(page),
-            limit: Number(limit),
+            success: true,
+            data: {
+                users: users.map(u => ({
+                    ...u,
+                    total: u.balance + u.bank,
+                })),
+                total,
+                page: Number(page),
+                limit: Number(limit),
+            },
         };
     });
 }

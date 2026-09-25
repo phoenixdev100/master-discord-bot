@@ -7,6 +7,8 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '@discord-platform/database';
+import { authenticateOrInternal } from '../middleware/auth';
+import { ensureGuild } from '../services/ensure';
 
 // Validation schemas
 const badWordSchema = z.object({
@@ -33,13 +35,105 @@ const autoModRuleSchema = z.object({
     exemptChannels: z.array(z.string()).default([]),
 });
 
+const RULE_DEFAULT_ACTIONS: Record<string, string> = {
+    spam: 'mute',
+    caps: 'delete',
+    mentions: 'mute',
+    links: 'delete',
+    emojis: 'delete',
+    invites: 'delete',
+};
+
 export async function autoModRoutes(app: FastifyInstance) {
+    app.addHook('preHandler', authenticateOrInternal);
+
+    // ============================================================================
+    // COMMAND-FACING ALIASES (used by the /automod slash command)
+    // ============================================================================
+
+    // Get all auto-mod rules for a guild
+    app.get('/guilds/:guildId/automod', async (request, reply) => {
+        const { guildId } = request.params as { guildId: string };
+
+        try {
+            const rules = await prisma.autoModRule.findMany({
+                where: { guildId },
+                orderBy: { createdAt: 'desc' },
+            });
+
+            return reply.send({
+                success: true,
+                data: { rules },
+            });
+        } catch (error) {
+            request.log.error({ error, guildId }, 'Failed to fetch auto-mod config');
+            return reply.status(500).send({
+                success: false,
+                error: 'Failed to fetch auto-mod config',
+            });
+        }
+    });
+
+    // Upsert an auto-mod rule by type (spam, caps, mentions, links, ...)
+    app.post('/guilds/:guildId/automod/:type', async (request, reply) => {
+        const { guildId, type } = request.params as { guildId: string; type: string };
+        const { enabled = true, threshold } = (request.body ?? {}) as {
+            enabled?: boolean;
+            threshold?: number;
+        };
+
+        if (!Object.keys(RULE_DEFAULT_ACTIONS).includes(type)) {
+            return reply.status(400).send({
+                success: false,
+                error: `Unknown rule type: ${type}`,
+            });
+        }
+
+        try {
+            await ensureGuild(guildId);
+
+            const existing = await prisma.autoModRule.findFirst({
+                where: { guildId, type },
+            });
+
+            const rule = existing
+                ? await prisma.autoModRule.update({
+                    where: { id: existing.id },
+                    data: {
+                        enabled,
+                        ...(threshold !== undefined && { threshold }),
+                    },
+                })
+                : await prisma.autoModRule.create({
+                    data: {
+                        guildId,
+                        name: `${type} detection`,
+                        type,
+                        enabled,
+                        threshold,
+                        action: RULE_DEFAULT_ACTIONS[type],
+                    },
+                });
+
+            return reply.send({
+                success: true,
+                data: rule,
+            });
+        } catch (error) {
+            request.log.error({ error, guildId, type }, 'Failed to update auto-mod rule');
+            return reply.status(500).send({
+                success: false,
+                error: 'Failed to update auto-mod rule',
+            });
+        }
+    });
+
     // ============================================================================
     // BAD WORD FILTER
     // ============================================================================
 
     // Get all bad words
-    app.get('/api/guilds/:guildId/automod/badwords', async (request, reply) => {
+    app.get('/guilds/:guildId/automod/badwords', async (request, reply) => {
         const { guildId } = request.params as { guildId: string };
 
         try {
@@ -63,11 +157,13 @@ export async function autoModRoutes(app: FastifyInstance) {
     });
 
     // Add bad word
-    app.post('/api/guilds/:guildId/automod/badwords', async (request, reply) => {
+    app.post('/guilds/:guildId/automod/badwords', async (request, reply) => {
         const { guildId } = request.params as { guildId: string };
         const data = badWordSchema.parse(request.body);
 
         try {
+            await ensureGuild(guildId);
+
             const word = await prisma.badWordFilter.create({
                 data: {
                     guildId,
@@ -89,7 +185,7 @@ export async function autoModRoutes(app: FastifyInstance) {
     });
 
     // Delete bad word
-    app.delete('/api/guilds/:guildId/automod/badwords/:id', async (request, reply) => {
+    app.delete('/guilds/:guildId/automod/badwords/:id', async (request, reply) => {
         const { guildId, id } = request.params as { guildId: string; id: string };
 
         try {
@@ -115,7 +211,7 @@ export async function autoModRoutes(app: FastifyInstance) {
     // ============================================================================
 
     // Get all scanned links
-    app.get('/api/guilds/:guildId/automod/links', async (request, reply) => {
+    app.get('/guilds/:guildId/automod/links', async (request, reply) => {
         const { guildId } = request.params as { guildId: string };
         const { type } = request.query as { type?: string };
 
@@ -143,11 +239,13 @@ export async function autoModRoutes(app: FastifyInstance) {
     });
 
     // Add link to scanner
-    app.post('/api/guilds/:guildId/automod/links', async (request, reply) => {
+    app.post('/guilds/:guildId/automod/links', async (request, reply) => {
         const { guildId } = request.params as { guildId: string };
         const data = linkScannerSchema.parse(request.body);
 
         try {
+            await ensureGuild(guildId);
+
             const link = await prisma.linkScanner.create({
                 data: {
                     guildId,
@@ -169,7 +267,7 @@ export async function autoModRoutes(app: FastifyInstance) {
     });
 
     // Delete link
-    app.delete('/api/guilds/:guildId/automod/links/:id', async (request, reply) => {
+    app.delete('/guilds/:guildId/automod/links/:id', async (request, reply) => {
         const { guildId, id } = request.params as { guildId: string; id: string };
 
         try {
@@ -195,7 +293,7 @@ export async function autoModRoutes(app: FastifyInstance) {
     // ============================================================================
 
     // Get all auto-mod rules
-    app.get('/api/guilds/:guildId/automod/rules', async (request, reply) => {
+    app.get('/guilds/:guildId/automod/rules', async (request, reply) => {
         const { guildId } = request.params as { guildId: string };
 
         try {
@@ -219,11 +317,13 @@ export async function autoModRoutes(app: FastifyInstance) {
     });
 
     // Create auto-mod rule
-    app.post('/api/guilds/:guildId/automod/rules', async (request, reply) => {
+    app.post('/guilds/:guildId/automod/rules', async (request, reply) => {
         const { guildId } = request.params as { guildId: string };
         const data = autoModRuleSchema.parse(request.body);
 
         try {
+            await ensureGuild(guildId);
+
             const rule = await prisma.autoModRule.create({
                 data: {
                     guildId,
@@ -245,7 +345,7 @@ export async function autoModRoutes(app: FastifyInstance) {
     });
 
     // Update auto-mod rule
-    app.put('/api/guilds/:guildId/automod/rules/:id', async (request, reply) => {
+    app.put('/guilds/:guildId/automod/rules/:id', async (request, reply) => {
         const { guildId, id } = request.params as { guildId: string; id: string };
         const data = autoModRuleSchema.partial().parse(request.body);
 
@@ -269,7 +369,7 @@ export async function autoModRoutes(app: FastifyInstance) {
     });
 
     // Delete auto-mod rule
-    app.delete('/api/guilds/:guildId/automod/rules/:id', async (request, reply) => {
+    app.delete('/guilds/:guildId/automod/rules/:id', async (request, reply) => {
         const { guildId, id } = request.params as { guildId: string; id: string };
 
         try {
@@ -295,7 +395,7 @@ export async function autoModRoutes(app: FastifyInstance) {
     // ============================================================================
 
     // Get raid protection settings
-    app.get('/api/guilds/:guildId/automod/raid-protection', async (request, reply) => {
+    app.get('/guilds/:guildId/automod/raid-protection', async (request, reply) => {
         const { guildId } = request.params as { guildId: string };
 
         try {
@@ -317,7 +417,7 @@ export async function autoModRoutes(app: FastifyInstance) {
     });
 
     // Update raid protection settings
-    app.put('/api/guilds/:guildId/automod/raid-protection', async (request, reply) => {
+    app.put('/guilds/:guildId/automod/raid-protection', async (request, reply) => {
         const { guildId } = request.params as { guildId: string };
         const data = request.body as any;
 

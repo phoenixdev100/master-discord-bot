@@ -6,9 +6,26 @@
 
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { prisma } from '@discord-platform/database';
+import { prisma, MODULE_DEFINITIONS } from '@discord-platform/database';
+import { authenticateOrInternal } from '../middleware/auth';
+import { getAllowedGuildIds, canAccessGuild } from '../middleware/guild-access';
+import { ensureGuild } from '../services/ensure';
+import { env } from '../config/env';
 
 export async function guildRoutes(app: FastifyInstance): Promise<void> {
+    app.addHook('preHandler', authenticateOrInternal);
+
+    // Guild-scope enforcement: requests carrying a user's Discord token may
+    // only touch guilds that user manages. Internal-key-only callers (the
+    // bot) are unrestricted.
+    app.addHook('preHandler', async (request, reply) => {
+        const { guildId } = request.params as { guildId?: string };
+        if (!guildId) return;
+        const allowed = await getAllowedGuildIds(request);
+        if (!canAccessGuild(allowed, guildId)) {
+            return reply.status(403).send({ success: false, error: 'You do not have permission to manage this guild' });
+        }
+    });
 
     // Schema for guild registration
     const registerSchema = z.object({
@@ -33,20 +50,16 @@ export async function guildRoutes(app: FastifyInstance): Promise<void> {
         const { name, icon, ownerId } = result.data;
 
         try {
-            // Ensure default modules exist
-            const defaultModules = ['utility', 'moderation', 'automod', 'leveling', 'economy', 'tickets'];
-            for (const modName of defaultModules) {
-                await prisma.module.upsert({
-                    where: { name: modName },
-                    update: {},
-                    create: {
-                        name: modName,
-                        category: 'system', // Default category
-                        description: `${modName} module`,
-                        isDefault: true
-                    }
-                });
-            }
+            // Ensure every known module exists (single bulk insert)
+            await prisma.module.createMany({
+                data: MODULE_DEFINITIONS.map((mod) => ({
+                    name: mod.name,
+                    category: mod.category,
+                    description: mod.description,
+                    isDefault: mod.isDefault,
+                })),
+                skipDuplicates: true,
+            });
 
             // Upsert guild
             const guild = await prisma.guild.upsert({
@@ -55,52 +68,136 @@ export async function guildRoutes(app: FastifyInstance): Promise<void> {
                     name,
                     icon,
                     ownerId,
+                    isActive: true,
+                    leftAt: null,
                 },
                 create: {
                     id: guildId,
                     name,
                     icon,
                     ownerId,
-                    modules: {
-                        create: defaultModules.map(modName => ({
-                            isEnabled: ['utility', 'moderation', 'automod'].includes(modName),
-                            module: { connect: { name: modName } }
-                        }))
-                    }
                 },
             });
 
-            // Ensure modules exist for existing guilds (if they were missing)
-            const existingModules = await prisma.guildModule.findMany({
-                where: { guildId },
-                include: { module: true }
+            // Ensure a GuildModule row exists for every module.
+            // New guilds start with every module enabled so commands work
+            // out of the box; admins can disable them per-module.
+            const moduleRows = await prisma.module.findMany({
+                where: { name: { in: MODULE_DEFINITIONS.map((m) => m.name) } },
             });
-            const existingModuleNames = existingModules.map(m => m.module.name);
 
-            const missingModules = defaultModules.filter((m: string) => !existingModuleNames.includes(m));
-
-            if (missingModules.length > 0) {
-                for (const modName of missingModules) {
-                    const module = await prisma.module.findUnique({
-                        where: { name: modName }
-                    });
-
-                    if (module) {
-                        await prisma.guildModule.create({
-                            data: {
-                                guildId,
-                                moduleId: module.id,
-                                isEnabled: ['utility', 'moderation', 'automod'].includes(modName),
-                            }
-                        });
-                    }
-                }
-            }
+            await prisma.guildModule.createMany({
+                data: moduleRows.map((m) => ({
+                    guildId,
+                    moduleId: m.id,
+                    isEnabled: true,
+                })),
+                skipDuplicates: true,
+            });
 
             return { success: true, guild };
         } catch (error) {
             request.log.error(error);
             return reply.status(500).send({ error: 'Failed to register guild' });
+        }
+    });
+
+    /**
+     * DELETE /api/guilds/:guildId/unregister
+     * Mark a guild as inactive (bot left the server)
+     */
+    app.delete('/:guildId/unregister', async (request, reply) => {
+        const { guildId } = request.params as { guildId: string };
+
+        try {
+            await prisma.guild.update({
+                where: { id: guildId },
+                data: {
+                    isActive: false,
+                    leftAt: new Date(),
+                },
+            });
+
+            return { success: true };
+        } catch (error) {
+            request.log.error(error);
+            return reply.status(500).send({ error: 'Failed to unregister guild' });
+        }
+    });
+
+    /**
+     * GET /api/guilds/:guildId/modules
+     * List all modules and their enabled state for a guild
+     */
+    app.get('/:guildId/modules', async (request, reply) => {
+        const { guildId } = request.params as { guildId: string };
+
+        try {
+            const guildModules = await prisma.guildModule.findMany({
+                where: { guildId },
+                include: { module: true },
+            });
+
+            return {
+                success: true,
+                modules: guildModules.map((gm) => ({
+                    name: gm.module.name,
+                    category: gm.module.category,
+                    description: gm.module.description,
+                    enabled: gm.isEnabled,
+                })),
+            };
+        } catch (error) {
+            request.log.error(error);
+            return reply.status(500).send({ error: 'Failed to fetch modules' });
+        }
+    });
+
+    /**
+     * PUT /api/guilds/:guildId/modules/:moduleName
+     * Enable or disable a module for a guild
+     */
+    app.put('/:guildId/modules/:moduleName', async (request, reply) => {
+        const { guildId, moduleName } = request.params as { guildId: string; moduleName: string };
+        const { enabled } = (request.body ?? {}) as { enabled?: boolean };
+
+        if (typeof enabled !== 'boolean') {
+            return reply.status(400).send({ error: '`enabled` (boolean) is required' });
+        }
+
+        try {
+            const definition = MODULE_DEFINITIONS.find((m) => m.name === moduleName);
+
+            const module = await prisma.module.upsert({
+                where: { name: moduleName },
+                update: {},
+                create: {
+                    name: moduleName,
+                    category: definition?.category ?? 'custom',
+                    description: definition?.description ?? `${moduleName} module`,
+                    isDefault: definition?.isDefault ?? false,
+                },
+            });
+
+            const guildModule = await prisma.guildModule.upsert({
+                where: {
+                    guildId_moduleId: {
+                        guildId,
+                        moduleId: module.id,
+                    },
+                },
+                update: { isEnabled: enabled },
+                create: {
+                    guildId,
+                    moduleId: module.id,
+                    isEnabled: enabled,
+                },
+            });
+
+            return { success: true, module: moduleName, enabled: guildModule.isEnabled };
+        } catch (error) {
+            request.log.error(error);
+            return reply.status(500).send({ error: 'Failed to update module' });
         }
     });
 
@@ -121,10 +218,89 @@ export async function guildRoutes(app: FastifyInstance): Promise<void> {
                 },
             });
 
-            return { enabled: guildModule?.isEnabled ?? false };
+            // Modules that have never been configured default to enabled
+            return { enabled: guildModule?.isEnabled ?? true };
         } catch (error) {
             request.log.error(error);
             return reply.status(500).send({ error: 'Failed to check module status' });
+        }
+    });
+
+    /**
+     * GET /api/guilds/:guildId/admin-role
+     * Current bot-admin role for the guild (null = none configured)
+     */
+    app.get('/:guildId/admin-role', async (request) => {
+        const { guildId } = request.params as { guildId: string };
+
+        const guild = await prisma.guild.findUnique({
+            where: { id: guildId },
+            select: { adminRoleId: true },
+        });
+
+        return { success: true, data: { adminRoleId: guild?.adminRoleId ?? null } };
+    });
+
+    /**
+     * PUT /api/guilds/:guildId/admin-role
+     * Assign the bot-admin role — members holding it may use admin commands
+     * (synced into Discord's command permissions by the bot).
+     */
+    app.put('/:guildId/admin-role', async (request, reply) => {
+        const { guildId } = request.params as { guildId: string };
+        const { roleId } = z.object({ roleId: z.string().nullable() }).parse(request.body);
+
+        try {
+            await ensureGuild(guildId);
+            const guild = await prisma.guild.update({
+                where: { id: guildId },
+                data: { adminRoleId: roleId },
+                select: { adminRoleId: true },
+            });
+
+            return { success: true, data: guild };
+        } catch (error) {
+            request.log.error({ error, guildId }, 'Failed to set admin role');
+            return reply.status(500).send({ success: false, error: 'Failed to set admin role' });
+        }
+    });
+
+    /**
+     * GET /api/guilds/:guildId/discord-roles
+     * Live role list from Discord (for the admin-role picker in the dashboard).
+     */
+    app.get('/:guildId/discord-roles', async (request, reply) => {
+        const { guildId } = request.params as { guildId: string };
+
+        if (!env.DISCORD_BOT_TOKEN) {
+            return reply.status(503).send({ success: false, error: 'Bot token not configured on the API' });
+        }
+
+        try {
+            const res = await fetch(`https://discord.com/api/v10/guilds/${guildId}/roles`, {
+                headers: { Authorization: `Bot ${env.DISCORD_BOT_TOKEN}` },
+            });
+
+            if (!res.ok) {
+                const body = await res.text().catch(() => '');
+                request.log.warn({ status: res.status, body, guildId }, 'Discord roles fetch failed');
+                return reply.status(res.status).send({ success: false, error: 'Failed to fetch roles from Discord' });
+            }
+
+            const roles = (await res.json()) as Array<{
+                id: string; name: string; color: number; position: number; managed: boolean;
+            }>;
+
+            return {
+                success: true,
+                data: roles
+                    .filter(r => r.id !== guildId) // exclude @everyone
+                    .sort((a, b) => b.position - a.position)
+                    .map(r => ({ id: r.id, name: r.name, color: r.color, position: r.position, managed: r.managed })),
+            };
+        } catch (error) {
+            request.log.error({ error, guildId }, 'Failed to fetch Discord roles');
+            return reply.status(500).send({ success: false, error: 'Failed to fetch roles' });
         }
     });
 }

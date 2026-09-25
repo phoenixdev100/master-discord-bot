@@ -6,11 +6,18 @@
 
 import type { FastifyInstance } from 'fastify';
 import { prisma } from '../config/database';
+import { authenticateOrInternal } from '../middleware/auth';
+import { ensureGuild, ensureUser } from '../services/ensure';
 
 export async function levelingRoutes(app: FastifyInstance) {
+    app.addHook('preHandler', authenticateOrInternal);
+
     // Get user leveling data
     app.get('/guilds/:guildId/leveling/:userId', async (request) => {
         const { guildId, userId } = request.params as { guildId: string; userId: string };
+
+        await ensureGuild(guildId);
+        await ensureUser(userId);
 
         let levelingData = await prisma.levelingData.findUnique({
             where: {
@@ -50,10 +57,13 @@ export async function levelingRoutes(app: FastifyInstance) {
         });
 
         return {
-            level: levelingData.level,
-            xp: levelingData.xp,
-            messages: levelingData.messages,
-            rank: rank + 1,
+            success: true,
+            data: {
+                level: levelingData.level,
+                xp: levelingData.xp,
+                messages: levelingData.messages,
+                rank: rank + 1,
+            },
         };
     });
 
@@ -86,10 +96,13 @@ export async function levelingRoutes(app: FastifyInstance) {
         ]);
 
         return {
-            users,
-            total,
-            page: Number(page),
-            limit: Number(limit),
+            success: true,
+            data: {
+                users,
+                total,
+                page: Number(page),
+                limit: Number(limit),
+            },
         };
     });
 
@@ -97,6 +110,9 @@ export async function levelingRoutes(app: FastifyInstance) {
     app.post('/guilds/:guildId/leveling/:userId/xp', async (request) => {
         const { guildId, userId } = request.params as { guildId: string; userId: string };
         const { amount = 15 } = request.body as { amount?: number };
+
+        await ensureGuild(guildId);
+        await ensureUser(userId);
 
         const levelingData = await prisma.levelingData.upsert({
             where: {
@@ -146,9 +162,12 @@ export async function levelingRoutes(app: FastifyInstance) {
         }
 
         return {
-            leveledUp,
-            newLevel,
-            xp: levelingData.xp,
+            success: true,
+            data: {
+                leveledUp,
+                newLevel,
+                xp: levelingData.xp,
+            },
         };
     });
 
@@ -156,6 +175,9 @@ export async function levelingRoutes(app: FastifyInstance) {
     app.put('/guilds/:guildId/leveling/:userId/xp', async (request) => {
         const { guildId, userId } = request.params as { guildId: string; userId: string };
         const { xp, level } = request.body as { xp?: number; level?: number };
+
+        await ensureGuild(guildId);
+        await ensureUser(userId);
 
         const updated = await prisma.levelingData.upsert({
             where: {

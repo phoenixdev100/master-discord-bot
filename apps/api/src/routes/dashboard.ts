@@ -6,8 +6,31 @@
 
 import type { FastifyInstance } from 'fastify';
 import { prisma } from '@discord-platform/database';
+import { authenticateOrInternal } from '../middleware/auth';
+import { getAllowedGuildIds, discordUserId } from '../middleware/guild-access';
+import { env } from '../config/env';
+import type { FastifyRequest } from 'fastify';
+
+declare module 'fastify' {
+    interface FastifyRequest {
+        allowedGuildIds?: Set<string> | null;
+    }
+}
+
+/** Global bot config may only be touched by the configured super admin. */
+function isSuperAdminRequest(request: FastifyRequest): boolean {
+    if (!env.SUPER_ADMIN_ID) return request.isInternal === true;
+    return discordUserId(request) === env.SUPER_ADMIN_ID;
+}
 
 export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
+    app.addHook('preHandler', authenticateOrInternal);
+
+    // Resolve which guilds the calling user may manage (null = unrestricted
+    // internal caller). Computed once per request.
+    app.addHook('preHandler', async (request) => {
+        request.allowedGuildIds = await getAllowedGuildIds(request);
+    });
 
     /**
      * GET /api/dashboard/stats
@@ -15,14 +38,17 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
      */
     app.get('/stats', async (request, reply) => {
         try {
+            const allowed = request.allowedGuildIds ?? new Set<string>();
+            const guildFilter = allowed === null ? {} : { guildId: { in: [...allowed] } };
+
             // Get total guilds
             const totalGuilds = await prisma.guild.count({
-                where: { isActive: true }
+                where: allowed === null ? { isActive: true } : { isActive: true, id: { in: [...allowed] } }
             });
 
-            // Get total enabled modules across all guilds
+            // Get total enabled modules across allowed guilds
             const enabledModules = await prisma.guildModule.count({
-                where: { isEnabled: true }
+                where: { isEnabled: true, ...guildFilter }
             });
 
             // Get total users known to the bot
@@ -54,8 +80,9 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
      */
     app.get('/guilds', async (request, reply) => {
         try {
+            const allowed = request.allowedGuildIds ?? new Set<string>();
             const guilds = await prisma.guild.findMany({
-                where: { isActive: true },
+                where: allowed === null ? { isActive: true } : { isActive: true, id: { in: [...allowed] } },
                 include: {
                     modules: {
                         include: {
@@ -99,14 +126,13 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
      */
     app.get('/modules', async (request, reply) => {
         try {
+            const allowed = request.allowedGuildIds ?? new Set<string>();
             const modules = await prisma.module.findMany({
                 include: {
                     guilds: {
-                        where: {
-                            guild: {
-                                isActive: true
-                            }
-                        }
+                        where: allowed === null
+                            ? { guild: { isActive: true } }
+                            : { guild: { isActive: true }, guildId: { in: [...allowed] } }
                     }
                 }
             });
@@ -132,9 +158,13 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
      */
     app.get('/activity', async (request, reply) => {
         try {
+            const allowed = request.allowedGuildIds ?? new Set<string>();
+            const scoped = allowed === null ? {} : { guildId: { in: [...allowed] } };
+
             // Fetch recent audit logs for activity feed
             const recentLogs = await prisma.auditLog.findMany({
                 take: 10,
+                where: scoped,
                 orderBy: {
                     createdAt: 'desc'
                 },
@@ -165,7 +195,7 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
 
             // Fallback if no logs: return recent guild joins as before
             const recentGuilds = await prisma.guild.findMany({
-                where: { isActive: true },
+                where: allowed === null ? { isActive: true } : { isActive: true, id: { in: [...allowed] } },
                 orderBy: { joinedAt: 'desc' },
                 take: 5,
                 select: {
@@ -193,6 +223,9 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
      * Toggle module default status
      */
     app.put('/modules/:id', async (request, reply) => {
+        if (!isSuperAdminRequest(request)) {
+            return reply.status(403).send({ error: 'Forbidden' });
+        }
         const { id } = request.params as { id: string };
         const { isDefault } = request.body as { isDefault: boolean };
 
@@ -215,19 +248,22 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
     app.get('/logs', async (request, reply) => {
         const { page = 1, limit = 50 } = request.query as { page: number, limit: number };
         const skip = (page - 1) * limit;
+        const allowed = request.allowedGuildIds ?? new Set<string>();
+        const scoped = allowed === null ? {} : { guildId: { in: [...allowed] } };
 
         try {
             const [logs, total] = await prisma.$transaction([
                 prisma.auditLog.findMany({
                     skip,
                     take: Number(limit),
+                    where: scoped,
                     orderBy: { createdAt: 'desc' },
                     include: {
                         guild: { select: { name: true } },
                         user: { select: { username: true } }
                     }
                 }),
-                prisma.auditLog.count()
+                prisma.auditLog.count({ where: scoped })
             ]);
 
             return {
@@ -254,9 +290,12 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
 
     /**
      * GET /api/dashboard/settings
-     * Get system configuration
+     * Get system configuration — super admin only
      */
     app.get('/settings', async (request, reply) => {
+        if (!isSuperAdminRequest(request)) {
+            return reply.status(403).send({ error: 'Forbidden' });
+        }
         try {
             const configs = await prisma.systemConfig.findMany();
             // Convert array of configs to a single object
@@ -272,9 +311,12 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
 
     /**
      * POST /api/dashboard/settings
-     * Update system configuration
+     * Update system configuration — super admin only
      */
     app.post('/settings', async (request, reply) => {
+        if (!isSuperAdminRequest(request)) {
+            return reply.status(403).send({ error: 'Forbidden' });
+        }
         const settings = request.body as Record<string, any>;
 
         try {

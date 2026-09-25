@@ -7,6 +7,8 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '../config/database';
+import { authenticateOrInternal } from '../middleware/auth';
+import { ensureUser } from '../services/ensure';
 
 const ReminderSchema = z.object({
     message: z.string(),
@@ -16,10 +18,14 @@ const ReminderSchema = z.object({
 });
 
 export async function remindersRoutes(app: FastifyInstance) {
+    app.addHook('preHandler', authenticateOrInternal);
+
     // Create reminder
     app.post('/users/:userId/reminders', async (request) => {
         const { userId } = request.params as { userId: string };
         const data = ReminderSchema.parse(request.body);
+
+        await ensureUser(userId);
 
         const reminder = await prisma.reminder.create({
             data: {

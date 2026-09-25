@@ -11,11 +11,16 @@ import { jwtService } from '../services/jwt';
 import { sessionService } from '../services/session';
 import { prisma } from '../config/database';
 import { authenticate } from '../middleware/auth';
+import redis from '../config/redis';
+import crypto from 'crypto';
 
 const callbackSchema = z.object({
     code: z.string(),
     state: z.string().optional(),
 });
+
+const OAUTH_STATE_TTL_SECONDS = 600; // 10 minutes
+const OAUTH_STATE_PREFIX = 'oauth:state:';
 
 export async function authRoutes(app: FastifyInstance): Promise<void> {
     /**
@@ -23,7 +28,16 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
      * Redirects to Discord OAuth2 authorization page
      */
     app.get('/login', async (_, reply) => {
-        const state = Math.random().toString(36).substring(7);
+        const state = crypto.randomBytes(24).toString('hex');
+
+        // Store state for CSRF validation on callback
+        try {
+            await redis.set(`${OAUTH_STATE_PREFIX}${state}`, '1', 'EX', OAUTH_STATE_TTL_SECONDS);
+        } catch (error) {
+            // If Redis is unavailable we still proceed, but log it
+            console.error('Failed to store OAuth state:', error);
+        }
+
         const authUrl = discordOAuth.getAuthorizationUrl(state);
 
         return reply.redirect(authUrl);
@@ -34,7 +48,28 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
      * Handles OAuth2 callback from Discord
      */
     app.get('/callback', async (request, reply) => {
-        const { code } = callbackSchema.parse(request.query);
+        const { code, state } = callbackSchema.parse(request.query);
+
+        // Validate OAuth state (CSRF protection)
+        if (state) {
+            try {
+                const key = `${OAUTH_STATE_PREFIX}${state}`;
+                const exists = await redis.get(key);
+                if (!exists) {
+                    return reply.status(400).send({
+                        error: 'Invalid State',
+                        message: 'OAuth state is invalid or expired. Please try logging in again.',
+                    });
+                }
+                await redis.del(key);
+            } catch (error) {
+                request.log.error({ error }, 'Failed to validate OAuth state');
+                return reply.status(500).send({
+                    error: 'Authentication Failed',
+                    message: 'Could not validate login state',
+                });
+            }
+        }
 
         try {
             // Exchange code for tokens
