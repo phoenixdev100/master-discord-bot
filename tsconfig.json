@@ -1,11 +1,11 @@
 {
     "compilerOptions": {
         "target": "ES2022",
-        "module": "commonjs",
+        "module": "nodenext",
         "lib": [
             "ES2022"
         ],
-        "moduleResolution": "node",
+        "moduleResolution": "nodenext",
         "esModuleInterop": true,
         "allowSyntheticDefaultImports": true,
         "strict": true,

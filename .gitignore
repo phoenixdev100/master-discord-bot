@@ -12,11 +12,9 @@ build/
 .next/
 out/
 
-# Environment variables
+# Environment variables - all variants, except the example template
 .env
-.env.local
-.env.*.local
-.env.production
+.env.*
 
 # Logs
 *.log
@@ -53,3 +51,6 @@ tmp/
 
 # Command deploy fingerprint cache
 .deploy-hash
+
+# TypeScript incremental build cache
+*.tsbuildinfo
