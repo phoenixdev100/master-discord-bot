@@ -7,7 +7,8 @@
 import pino from 'pino';
 import { env, isDevelopment } from './env';
 
-export const logger = pino({
+// Fastify 5 accepts a config object (not a pino instance) for `logger`.
+export const loggerConfig = {
     level: env.LOG_LEVEL,
     transport: isDevelopment
         ? {
@@ -19,6 +20,8 @@ export const logger = pino({
             },
         }
         : undefined,
-});
+};
+
+export const logger = pino(loggerConfig);
 
 export default logger;
