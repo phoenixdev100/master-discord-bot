@@ -121,30 +121,32 @@ export class PermissionService {
         const isGuildOwner = guild?.ownerId === userId;
 
         // Get user's guild membership
-        const guildUser = await this.prisma.guildUser.findUnique({
+        await this.prisma.guildUser.findUnique({
             where: {
                 guildId_userId: {
                     guildId,
                     userId,
                 },
             },
-            include: {
-                roles: {
-                    include: {
-                        role: true,
-                    },
-                },
-            },
         });
 
         // Get roles with permissions
-        const roles: RoleWithPermissions[] =
-            guildUser?.roles.map((assignment) => ({
-                id: assignment.role.id,
-                name: assignment.role.name,
-                permissions: assignment.role.permissions as string[],
-                position: assignment.role.position,
-            })) ?? [];
+        const roleAssignments = await this.prisma.roleAssignment.findMany({
+            where: {
+                userId,
+                guildId,
+            },
+            include: {
+                role: true,
+            },
+        });
+
+        const roles: RoleWithPermissions[] = roleAssignments.map((assignment) => ({
+            id: assignment.role.id,
+            name: assignment.role.name,
+            permissions: assignment.role.permissions as string[],
+            position: assignment.role.position,
+        }));
 
         // Get user-specific permission overrides
         const permissionOverrides = await this.prisma.permission.findMany({
@@ -222,11 +224,11 @@ export class PermissionService {
                 resource,
                 action,
                 effect: PermissionEffect.ALLOW,
-                conditions,
+                conditions: conditions as any,
             },
             update: {
                 effect: PermissionEffect.ALLOW,
-                conditions,
+                conditions: conditions as any,
             },
         });
 
@@ -283,11 +285,11 @@ export class PermissionService {
                 resource,
                 action,
                 effect: PermissionEffect.DENY,
-                conditions,
+                conditions: conditions as any,
             },
             update: {
                 effect: PermissionEffect.DENY,
-                conditions,
+                conditions: conditions as any,
             },
         });
 
