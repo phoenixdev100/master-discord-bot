@@ -24,7 +24,7 @@
     "@typescript-eslint/eslint-plugin": "^7.0.0",
     "@typescript-eslint/parser": "^7.0.0",
     "eslint": "^8.57.0",
-    "turbo": "^1.13.4",
+    "turbo": "^2.9.14",
     "typescript": "^5.3.3"
   },
   "engines": {
@@ -42,6 +42,7 @@
       "brace-expansion@2": "^2.1.7",
       "nanoid@3": "^3.3.19",
       "picomatch@2": "^2.3.2",
+      "picomatch@4": "^4.0.7",
       "js-yaml@4": "^4.3.2",
       "bn.js@4": "^4.12.5",
       "browserslist": "^4.29.1",
