@@ -85,7 +85,7 @@ export async function createServer() {
     }
 
     // Global hooks
-    app.addHook('onRequest', auditLog);
+    app.addHook('onResponse', auditLog);
 
     // Error handlers
     app.setErrorHandler(errorHandler as any);

@@ -8,10 +8,13 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '@discord-platform/database';
+import { authenticateOrInternal } from '../middleware/auth';
+import { ensureGuild, ensureUser } from '../services/ensure';
 
 // Validation schemas
 const banUserSchema = z.object({
     userId: z.string(),
+    moderatorId: z.string(),
     reason: z.string().optional(),
     duration: z.number().optional(), // Seconds (for temp ban)
     deleteMessageDays: z.number().min(0).max(7).default(0),
@@ -19,17 +22,20 @@ const banUserSchema = z.object({
 
 const kickUserSchema = z.object({
     userId: z.string(),
+    moderatorId: z.string(),
     reason: z.string().optional(),
 });
 
 const muteUserSchema = z.object({
     userId: z.string(),
+    moderatorId: z.string(),
     reason: z.string().optional(),
     duration: z.number().optional(), // Seconds
 });
 
 const warnUserSchema = z.object({
     userId: z.string(),
+    moderatorId: z.string(),
     reason: z.string(),
 });
 
@@ -39,19 +45,22 @@ const updateCaseSchema = z.object({
 });
 
 export async function moderationRoutes(app: FastifyInstance) {
+    app.addHook('preHandler', authenticateOrInternal);
+
     // ============================================================================
     // BAN USER
     // ============================================================================
 
-    app.post('/api/guilds/:guildId/moderation/ban', async (request, reply) => {
+    app.post('/guilds/:guildId/moderation/ban', async (request, reply) => {
         const { guildId } = request.params as { guildId: string };
         const body = banUserSchema.parse(request.body);
-        const { userId, reason, duration } = body;
-
-        // TODO: Get from authenticated user
-        const moderatorId = 'system';
+        const { userId, moderatorId, reason, duration } = body;
 
         try {
+            await ensureGuild(guildId);
+            await ensureUser(userId);
+            await ensureUser(moderatorId);
+
             // Get next case number
             const lastCase = await prisma.moderationCase.findFirst({
                 where: { guildId },
@@ -94,12 +103,15 @@ export async function moderationRoutes(app: FastifyInstance) {
     // UNBAN USER
     // ============================================================================
 
-    app.post('/api/guilds/:guildId/moderation/unban', async (request, reply) => {
+    app.post('/guilds/:guildId/moderation/unban', async (request, reply) => {
         const { guildId } = request.params as { guildId: string };
-        const { userId, reason } = request.body as { userId: string; reason?: string };
-        const moderatorId = 'system';
+        const { userId, moderatorId, reason } = request.body as { userId: string; moderatorId: string; reason?: string };
 
         try {
+            await ensureGuild(guildId);
+            await ensureUser(userId);
+            await ensureUser(moderatorId);
+
             // Deactivate existing ban cases
             await prisma.moderationCase.updateMany({
                 where: {
@@ -148,12 +160,15 @@ export async function moderationRoutes(app: FastifyInstance) {
     // KICK USER
     // ============================================================================
 
-    app.post('/api/guilds/:guildId/moderation/kick', async (request, reply) => {
+    app.post('/guilds/:guildId/moderation/kick', async (request, reply) => {
         const { guildId } = request.params as { guildId: string };
-        const { userId, reason } = kickUserSchema.parse(request.body);
-        const moderatorId = 'system';
+        const { userId, moderatorId, reason } = kickUserSchema.parse(request.body);
 
         try {
+            await ensureGuild(guildId);
+            await ensureUser(userId);
+            await ensureUser(moderatorId);
+
             const lastCase = await prisma.moderationCase.findFirst({
                 where: { guildId },
                 orderBy: { caseNumber: 'desc' },
@@ -189,12 +204,15 @@ export async function moderationRoutes(app: FastifyInstance) {
     // MUTE USER
     // ============================================================================
 
-    app.post('/api/guilds/:guildId/moderation/mute', async (request, reply) => {
+    app.post('/guilds/:guildId/moderation/mute', async (request, reply) => {
         const { guildId } = request.params as { guildId: string };
-        const { userId, reason, duration } = muteUserSchema.parse(request.body);
-        const moderatorId = 'system';
+        const { userId, moderatorId, reason, duration } = muteUserSchema.parse(request.body);
 
         try {
+            await ensureGuild(guildId);
+            await ensureUser(userId);
+            await ensureUser(moderatorId);
+
             const lastCase = await prisma.moderationCase.findFirst({
                 where: { guildId },
                 orderBy: { caseNumber: 'desc' },
@@ -234,12 +252,15 @@ export async function moderationRoutes(app: FastifyInstance) {
     // UNMUTE USER
     // ============================================================================
 
-    app.post('/api/guilds/:guildId/moderation/unmute', async (request, reply) => {
+    app.post('/guilds/:guildId/moderation/unmute', async (request, reply) => {
         const { guildId } = request.params as { guildId: string };
-        const { userId, reason } = request.body as { userId: string; reason?: string };
-        const moderatorId = 'system';
+        const { userId, moderatorId, reason } = request.body as { userId: string; moderatorId: string; reason?: string };
 
         try {
+            await ensureGuild(guildId);
+            await ensureUser(userId);
+            await ensureUser(moderatorId);
+
             await prisma.moderationCase.updateMany({
                 where: {
                     guildId,
@@ -287,12 +308,15 @@ export async function moderationRoutes(app: FastifyInstance) {
     // WARN USER
     // ============================================================================
 
-    app.post('/api/guilds/:guildId/moderation/warn', async (request, reply) => {
+    app.post('/guilds/:guildId/moderation/warn', async (request, reply) => {
         const { guildId } = request.params as { guildId: string };
-        const { userId, reason } = warnUserSchema.parse(request.body);
-        const moderatorId = 'system';
+        const { userId, moderatorId, reason } = warnUserSchema.parse(request.body);
 
         try {
+            await ensureGuild(guildId);
+            await ensureUser(userId);
+            await ensureUser(moderatorId);
+
             const lastCase = await prisma.moderationCase.findFirst({
                 where: { guildId },
                 orderBy: { caseNumber: 'desc' },
@@ -338,7 +362,7 @@ export async function moderationRoutes(app: FastifyInstance) {
     // GET MODERATION CASES
     // ============================================================================
 
-    app.get('/api/guilds/:guildId/moderation/cases', async (request, reply) => {
+    app.get('/guilds/:guildId/moderation/cases', async (request, reply) => {
         const { guildId } = request.params as { guildId: string };
         const query = request.query as any;
 
@@ -386,7 +410,7 @@ export async function moderationRoutes(app: FastifyInstance) {
     // GET SINGLE MODERATION CASE
     // ============================================================================
 
-    app.get('/api/guilds/:guildId/moderation/cases/:caseNumber', async (request, reply) => {
+    app.get('/guilds/:guildId/moderation/cases/:caseNumber', async (request, reply) => {
         const { guildId, caseNumber } = request.params as { guildId: string; caseNumber: string };
 
         try {
@@ -423,7 +447,7 @@ export async function moderationRoutes(app: FastifyInstance) {
     // UPDATE MODERATION CASE
     // ============================================================================
 
-    app.put('/api/guilds/:guildId/moderation/cases/:caseNumber', async (request, reply) => {
+    app.put('/guilds/:guildId/moderation/cases/:caseNumber', async (request, reply) => {
         const { guildId, caseNumber } = request.params as { guildId: string; caseNumber: string };
         const updates = updateCaseSchema.parse(request.body);
 
@@ -455,7 +479,7 @@ export async function moderationRoutes(app: FastifyInstance) {
     // DELETE MODERATION CASE (Soft Delete)
     // ============================================================================
 
-    app.delete('/api/guilds/:guildId/moderation/cases/:caseNumber', async (request, reply) => {
+    app.delete('/guilds/:guildId/moderation/cases/:caseNumber', async (request, reply) => {
         const { guildId, caseNumber } = request.params as { guildId: string; caseNumber: string };
 
         try {
@@ -488,7 +512,7 @@ export async function moderationRoutes(app: FastifyInstance) {
     // GET USER WARNINGS
     // ============================================================================
 
-    app.get('/api/guilds/:guildId/moderation/warnings/:userId', async (request, reply) => {
+    app.get('/guilds/:guildId/moderation/warnings/:userId', async (request, reply) => {
         const { guildId, userId } = request.params as { guildId: string; userId: string };
 
         try {
@@ -503,7 +527,7 @@ export async function moderationRoutes(app: FastifyInstance) {
 
             return reply.send({
                 success: true,
-                warnings,
+                data: warnings,
                 count: warnings.length,
             });
         } catch (error) {
