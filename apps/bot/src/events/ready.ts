@@ -7,27 +7,43 @@
 import type { BotClient } from '../client';
 import logger from '../config/logger';
 import { apiClient } from '../utils/api-client';
-import { deployGuildCommands } from '../utils/deploy-commands';
+import { deployGuildCommands, hasCommandsChanged, saveCommandsHash } from '../utils/deploy-commands';
+import { env } from '../config/env';
 
 export async function handleReady(client: BotClient): Promise<void> {
     logger.info(`✅ Bot logged in as ${client.user?.tag}`);
     logger.info(`📊 Serving ${client.guilds.cache.size} guilds`);
 
-    // Deploy commands to all guilds
-    logger.info('🚀 Deploying commands to Discord...');
-    const guilds = client.guilds.cache;
-    logger.info(`📊 Deploying ${client.commands.size} commands to ${guilds.size} guild(s)...`);
+    // Deploy commands to all guilds — but only when definitions changed
+    // (tsx watch restarts on every file save; Discord rate-limits guild
+    // command deploys to ~200/day, so blind redeploys are risky)
+    const shouldDeploy =
+        env.DEPLOY_COMMANDS === 'always' ||
+        (env.DEPLOY_COMMANDS === 'changed' && hasCommandsChanged(client));
 
-    for (const [guildId, guild] of guilds) {
-        try {
-            await deployGuildCommands(client, guildId);
-            logger.info(`✅ Deployed ${client.commands.size} commands to ${guild.name}`);
-        } catch (error) {
-            logger.error({ error, guildId, guildName: guild.name }, `❌ Failed to deploy to ${guild.name}`);
+    if (shouldDeploy) {
+        logger.info('🚀 Deploying commands to Discord...');
+        const guilds = client.guilds.cache;
+        logger.info(`📊 Deploying ${client.commands.size} commands to ${guilds.size} guild(s)...`);
+
+        let allSucceeded = true;
+        for (const [guildId, guild] of guilds) {
+            try {
+                await deployGuildCommands(client, guildId);
+                logger.info(`✅ Deployed commands to ${guild.name}`);
+            } catch (error) {
+                allSucceeded = false;
+                logger.error({ error, guildId, guildName: guild.name }, `❌ Failed to deploy to ${guild.name}`);
+            }
         }
-    }
 
-    logger.info('✅ Commands deployed successfully');
+        if (allSucceeded) {
+            saveCommandsHash(client);
+            logger.info('✅ Commands deployed successfully');
+        }
+    } else {
+        logger.info('⏭️  Commands unchanged — skipping deploy');
+    }
 
     // Check API connectivity
     const apiHealthy = await apiClient.healthCheck();

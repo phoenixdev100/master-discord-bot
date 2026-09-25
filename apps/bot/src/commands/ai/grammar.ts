@@ -1,44 +1,55 @@
 /**
  * Grammar Command
- * 
- * Check grammar
+ *
+ * Fix grammar and spelling in a piece of text.
  */
 
-import { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits, MessageFlags } from 'discord.js';
+import { SlashCommandBuilder, EmbedBuilder } from 'discord.js';
 import type { Command } from '../../types/command';
+import { aiAsk } from '../../utils/ai';
 
 export const grammar: Command = {
     data: new SlashCommandBuilder()
         .setName('grammar')
-        .setDescription('Check grammar')
-        .setDefaultMemberPermissions(PermissionFlagsBits.SendMessages)
+        .setDescription('Check and fix grammar')
         .setDMPermission(false)
         .addStringOption(option =>
-            option
-                .setName('text')
-                .setDescription('Text to check')
-                .setRequired(true)
+            option.setName('text').setDescription('Text to check').setRequired(true).setMaxLength(2000)
         ),
     category: 'ai',
 
     async execute(interaction) {
         if (!interaction.guild) return;
 
+        const text = interaction.options.getString('text', true);
+        await interaction.deferReply();
+
         try {
+            const answer = await aiAsk(
+                `Fix all grammar and spelling mistakes in the text. Reply in this format:
+CORRECTED: <fixed text>
+NOTES: <short list of what was fixed, or "No mistakes found">`,
+                text
+            );
+
+            const corrected = answer.match(/CORRECTED:\s*([\s\S]+?)(?=NOTES:|$)/i)?.[1]?.trim() ?? answer;
+            const notes = answer.match(/NOTES:\s*([\s\S]+)/i)?.[1]?.trim();
+
             const embed = new EmbedBuilder()
-                .setColor('#5865F2')
-                .setTitle('🚧 Command In Development')
-                .setDescription(`This command is currently being developed!\n\n**Command:** \`/grammar\`\n**Category:** ai\n\nCheck back soon for updates!`)
-                .setFooter({ text: 'Coming soon!' })
+                .setColor(0x9b59b6)
+                .setTitle('✍️ Grammar Check')
+                .addFields(
+                    { name: 'Original', value: `> ${text.slice(0, 900)}` },
+                    { name: 'Corrected', value: `> ${corrected.slice(0, 900)}` },
+                )
+                .setFooter({ text: `Requested by ${interaction.user.tag}` })
                 .setTimestamp();
 
-            await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+            if (notes) embed.addFields({ name: 'Notes', value: notes.slice(0, 800) });
+            await interaction.editReply({ embeds: [embed] });
         } catch (error: any) {
-            console.error('grammar command error:', error);
-            await interaction.reply({
-                content: '❌ An error occurred while executing this command',
-                flags: MessageFlags.Ephemeral
-            });
+            console.error('grammar error:', error);
+            await interaction.editReply({ content: `❌ Grammar check failed: ${error.message ?? 'Unknown error'}` });
         }
-    }
+    },
 };

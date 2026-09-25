@@ -1,44 +1,47 @@
 /**
- * Aimoderate Command
- * 
- * AI moderation check
+ * AIModerate Command
+ *
+ * AI-powered moderation check — is this text safe to post?
  */
 
-import { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits, MessageFlags } from 'discord.js';
+import { SlashCommandBuilder, EmbedBuilder } from 'discord.js';
 import type { Command } from '../../types/command';
+import { aiModerate } from '../../utils/ai';
 
-export const aimoderate: Command = {
+export const moderate: Command = {
     data: new SlashCommandBuilder()
         .setName('aimoderate')
-        .setDescription('AI moderation check')
-        .setDefaultMemberPermissions(PermissionFlagsBits.SendMessages)
+        .setDescription('Check if text is safe (AI moderation)')
         .setDMPermission(false)
         .addStringOption(option =>
-            option
-                .setName('text')
-                .setDescription('Text to moderate')
-                .setRequired(true)
+            option.setName('text').setDescription('Text to moderate').setRequired(true).setMaxLength(1000)
         ),
     category: 'ai',
 
     async execute(interaction) {
         if (!interaction.guild) return;
 
+        const text = interaction.options.getString('text', true);
+        await interaction.deferReply();
+
         try {
+            const { verdict, details } = await aiModerate(text);
+
+            const colors: Record<string, number> = { SAFE: 0x57f287, WARN: 0xfee75c, UNSAFE: 0xed4245 };
+            const icons: Record<string, string> = { SAFE: '✅', WARN: '⚠️', UNSAFE: '🚫' };
+
             const embed = new EmbedBuilder()
-                .setColor('#5865F2')
-                .setTitle('🚧 Command In Development')
-                .setDescription(`This command is currently being developed!\n\n**Command:** \`/aimoderate\`\n**Category:** ai\n\nCheck back soon for updates!`)
-                .setFooter({ text: 'Coming soon!' })
+                .setColor(colors[verdict] ?? 0xfee75c)
+                .setTitle(`${icons[verdict] ?? '⚠️'} Moderation: ${verdict}`)
+                .setDescription(details)
+                .addFields({ name: 'Checked text', value: `> ${text.slice(0, 500)}` })
+                .setFooter({ text: `Requested by ${interaction.user.tag}` })
                 .setTimestamp();
 
-            await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+            await interaction.editReply({ embeds: [embed] });
         } catch (error: any) {
-            console.error('aimoderate command error:', error);
-            await interaction.reply({
-                content: '❌ An error occurred while executing this command',
-                flags: MessageFlags.Ephemeral
-            });
+            console.error('aimoderate error:', error);
+            await interaction.editReply({ content: `❌ Moderation check failed: ${error.message ?? 'Unknown error'}` });
         }
-    }
+    },
 };

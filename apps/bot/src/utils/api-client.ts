@@ -7,6 +7,27 @@
 import { env } from '../config/env';
 import logger from '../config/logger';
 
+/**
+ * Error thrown when the API responds with a non-2xx status.
+ * Exposes `status` and `data` (parsed body), plus a `response`
+ * getter for axios-style `error.response?.status` compatibility.
+ */
+export class ApiError extends Error {
+    constructor(
+        public readonly status: number,
+        public readonly data: any,
+        message?: string
+    ) {
+        super(message ?? `API request failed: ${status}`);
+        this.name = 'ApiError';
+    }
+
+    /** Axios-style compatibility shim used by existing commands. */
+    get response(): { status: number; data: any } {
+        return { status: this.status, data: this.data };
+    }
+}
+
 export class APIClient {
     private baseUrl: string;
 
@@ -21,25 +42,47 @@ export class APIClient {
         endpoint: string,
         options?: RequestInit
     ): Promise<T> {
-        const url = `${this.baseUrl}${endpoint}`;
+        // Normalize: all API routes live under the /api prefix
+        const path = endpoint.startsWith('/api') ? endpoint : `/api${endpoint}`;
+        const url = `${this.baseUrl}${path}`;
+
+        const headers: Record<string, string> = {
+            'Content-Type': 'application/json',
+            ...(options?.headers as Record<string, string> | undefined),
+        };
+
+        // Internal service authentication
+        if (env.INTERNAL_API_KEY) {
+            headers['x-api-key'] = env.INTERNAL_API_KEY;
+        }
 
         try {
             const response = await fetch(url, {
                 ...options,
-                headers: {
-                    'Content-Type': 'application/json',
-                    ...options?.headers,
-                },
+                headers,
             });
 
             if (!response.ok) {
-                const error = await response.text();
-                throw new Error(`API request failed: ${response.status} ${error}`);
+                const body = await response.text();
+                let data: any = body;
+                try {
+                    data = JSON.parse(body);
+                } catch {
+                    // Not JSON - keep raw text
+                }
+                throw new ApiError(response.status, data);
             }
 
             return response.json() as Promise<T>;
         } catch (error) {
-            logger.error({ error, endpoint }, 'API request failed');
+            if (!(error instanceof ApiError)) {
+                // Network-level failure (e.g. ECONNREFUSED when API is down).
+                // fetch throws TypeError with the real reason in `cause`.
+                const cause = (error as any)?.cause;
+                const reason = cause?.code ?? cause?.message
+                    ?? (error instanceof Error ? error.message : String(error));
+                logger.warn({ endpoint: path, reason }, 'API unreachable');
+            }
             throw error;
         }
     }
@@ -117,7 +160,7 @@ export class APIClient {
             return response.enabled;
         } catch (error) {
             logger.warn({ error, guildId, moduleName }, 'Failed to check module status');
-            return false;
+            return true; // Fail open so commands aren't blocked by API issues
         }
     }
 

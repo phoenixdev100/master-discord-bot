@@ -10,16 +10,14 @@ import { env } from './config/env';
 import logger from './config/logger';
 import { loadEvents } from './utils/event-loader';
 import { loadCommands } from './utils/command-loader';
+import { startReminderPoller, stopReminderPoller } from './services/reminder-poller';
 
-async function main() {
+async function main(): Promise<BotClient> {
     try {
         logger.info('🤖 Starting Discord Bot...');
 
-        // Debug env
-        logger.info(`Token present: ${!!env.DISCORD_BOT_TOKEN}`);
-        if (env.DISCORD_BOT_TOKEN) {
-            logger.info(`Token length: ${env.DISCORD_BOT_TOKEN.length}`);
-            logger.info(`Token start: ${env.DISCORD_BOT_TOKEN.substring(0, 5)}...`);
+        if (!env.DISCORD_BOT_TOKEN) {
+            logger.warn('⚠️ DISCORD_BOT_TOKEN is not set');
         }
 
         // Create client
@@ -46,11 +44,15 @@ async function main() {
             logger.info('Attempting to login...');
             await client.login(env.DISCORD_BOT_TOKEN);
             logger.info('✅ Bot logged in to Discord');
+
+            // Start the reminder delivery poller
+            startReminderPoller(client);
         } else {
             logger.warn('⚠️ No bot token found, skipping Discord login');
         }
 
         logger.info('✅ Bot initialization complete');
+        return client;
     } catch (error: any) {
         logger.error('❌ Failed to start bot');
 
@@ -83,21 +85,20 @@ async function main() {
     }
 }
 
-// Graceful shutdown
+// Graceful shutdown — bounded: force-exits after 3s so Ctrl+C
+// never leaves a hung terminal.
 async function shutdown(signal: string, client?: BotClient) {
-    logger.info(`${signal} received, shutting down gracefully...`);
+    logger.info(`${signal} received, shutting down...`);
+
+    const forceExit = setTimeout(() => process.exit(0), 3000);
+    forceExit.unref();
 
     try {
-        if (client) {
-            client.destroy();
-            logger.info('✅ Discord client destroyed');
-        }
-
+        stopReminderPoller();
+        client?.destroy();
         logger.info('👋 Shutdown complete');
+    } finally {
         process.exit(0);
-    } catch (error) {
-        logger.error({ error }, '❌ Error during shutdown');
-        process.exit(1);
     }
 }
 
@@ -114,6 +115,6 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // Start the bot
 main().then((client) => {
-    process.on('SIGTERM', () => shutdown('SIGTERM', client as any));
-    process.on('SIGINT', () => shutdown('SIGINT', client as any));
+    process.on('SIGTERM', () => shutdown('SIGTERM', client));
+    process.on('SIGINT', () => shutdown('SIGINT', client));
 });

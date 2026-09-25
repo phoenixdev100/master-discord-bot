@@ -84,6 +84,7 @@ export const command: Command = {
                 `/guilds/${interaction.guild.id}/moderation/kick`,
                 {
                     userId: user.id,
+                    moderatorId: interaction.user.id,
                     reason,
                 }
             );
