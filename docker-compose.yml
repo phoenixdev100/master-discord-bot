@@ -1,16 +1,29 @@
-version: '3.8'
+# Production compose.
+# NOTE: docker-compose.override.yml is merged automatically on
+# `docker compose up` — it adds dev bind mounts + watch-mode targets.
+# For a pure production run:
+#   docker compose -f docker-compose.yml up -d --build
 
+# Network isolation:
+#   frontend — bot, dashboard, api (internet-facing side)
+#   backend  — api, postgres, redis ONLY. bot/dashboard have no route or DNS
+#              to the DB tier at all.
 services:
   postgres:
     image: postgres:16-alpine
     container_name: discord-bot-postgres
     restart: unless-stopped
+    networks:
+      - backend
     environment:
       POSTGRES_USER: discord_bot
       POSTGRES_PASSWORD: discord_bot_password
       POSTGRES_DB: discord_bot_db
     ports:
-      - "5432:5432"
+      # Bound to localhost only — reachable from THIS machine (Prisma Studio,
+      # psql) but not from the LAN/internet. Delete these lines entirely for
+      # full lockdown.
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -23,8 +36,10 @@ services:
     image: redis:7-alpine
     container_name: discord-bot-redis
     restart: unless-stopped
+    networks:
+      - backend
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379" # localhost only, same as postgres
     volumes:
       - redis_data:/data
     healthcheck:
@@ -34,68 +49,100 @@ services:
       retries: 5
 
   api:
+    # Built locally, pushed to Docker Hub — prod file pulls this image.
+    image: phoenixdev100/discord-bot-api:latest
     build:
       context: .
       dockerfile: apps/api/Dockerfile
     container_name: discord-bot-api
     restart: unless-stopped
+    networks:
+      - frontend
+      - backend # only api sits on both — it's the bridge to the DB tier
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    environment:
-      - NODE_ENV=production
-      - DATABASE_URL=postgresql://discord_bot:discord_bot_password@postgres:5432/discord_bot_db
-      - REDIS_URL=redis://redis:6379
     env_file:
       - .env
+    environment:
+      # `environment` wins over env_file — these must point at the
+      # compose service names, not localhost.
+      NODE_ENV: production
+      DATABASE_URL: postgresql://discord_bot:discord_bot_password@postgres:5432/discord_bot_db
+      REDIS_URL: redis://redis:6379
+      API_HOST: 0.0.0.0 # bind all interfaces or other containers can't reach it
+      API_URL: http://api:4000
     ports:
       - "4000:4000"
-    volumes:
-      - ./apps/api:/app/apps/api
-      - /app/node_modules
-      - /app/apps/api/node_modules
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4000/api/health/live >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s # Neon/Postgres cold start can be slow
 
   bot:
+    image: phoenixdev100/discord-bot:latest
     build:
       context: .
       dockerfile: apps/bot/Dockerfile
     container_name: discord-bot
     restart: unless-stopped
+    networks:
+      - frontend # can reach api + internet, but NOT postgres/redis
     depends_on:
-      - api
-    environment:
-      - NODE_ENV=production
-      - API_URL=http://api:4000
+      api:
+        condition: service_healthy
     env_file:
       - .env
-    volumes:
-      - ./apps/bot:/app/apps/bot
-      - /app/node_modules
-      - /app/apps/bot/node_modules
+    environment:
+      NODE_ENV: production
+      API_URL: http://api:4000
+    healthcheck:
+      # No port exposed — check the gateway process is alive.
+      test: ["CMD-SHELL", "pgrep node >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   dashboard:
+    image: phoenixdev100/discord-bot-dashboard:latest
     build:
       context: .
       dockerfile: apps/dashboard/Dockerfile
+      args:
+        # Rewrites are baked into the standalone build — this must be the
+        # in-network service name, NOT localhost (localhost inside the
+        # dashboard container is the dashboard itself).
+        NEXT_PUBLIC_API_URL: http://api:4000
     container_name: discord-bot-dashboard
     restart: unless-stopped
+    networks:
+      - frontend # same — api + internet only
     depends_on:
-      - api
-    environment:
-      - NODE_ENV=production
-      - NEXT_PUBLIC_API_URL=http://localhost:4000
+      api:
+        condition: service_healthy
     env_file:
       - .env
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_URL: http://api:4000
     ports:
       - "3000:3000"
-    volumes:
-      - ./apps/dashboard:/app/apps/dashboard
-      - /app/node_modules
-      - /app/apps/dashboard/node_modules
-      - /app/apps/dashboard/.next
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/ >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
 volumes:
   postgres_data:
   redis_data:
+
+networks:
+  frontend:
+  backend:

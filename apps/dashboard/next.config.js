@@ -1,9 +1,18 @@
+const path = require('path');
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
     reactStrictMode: true,
-    swcMinify: true,
+    // Standalone output for Docker: emits .next/standalone with a minimal
+    // server.js and traced node_modules (no full install needed at runtime).
+    // Conditional: on Windows this fails with EPERM — standalone tracing
+    // recreates pnpm's symlink tree and Windows blocks symlinks without
+    // Developer Mode. The Dockerfile sets DOCKER_BUILD=1 (Linux, works fine).
+    output: process.env.DOCKER_BUILD === '1' ? 'standalone' : undefined,
+    // Monorepo: trace dependencies from the repo root, not just this app dir.
+    outputFileTracingRoot: path.join(__dirname, '../../'),
     images: {
-        domains: ['cdn.discordapp.com'],
+        remotePatterns: [{ protocol: 'https', hostname: 'cdn.discordapp.com' }],
     },
     env: {
         NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL,
