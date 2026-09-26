@@ -24,6 +24,17 @@ Discord bot monorepo (pnpm + Turborepo). Workspaces: `apps/bot` (discord.js), `a
 - Root `.env` holds all secrets (gitignored): Discord creds, `DATABASE_URL` (Neon), `JWT_SECRET`, `NEXTAUTH_SECRET`, `INTERNAL_API_KEY`.
 - Docker Compose env comes from `env_file: .env` so new vars propagate automatically.
 
+## Docker
+
+- Per-app Dockerfiles (`apps/{bot,api,dashboard}/Dockerfile`), each with `deps → build → runtime` stages plus a `dev` target (tsx watch / next dev).
+- `docker-compose.yml` = production. `docker-compose.override.yml` = dev (auto-merged by `docker compose up`; adds `.:/app` bind mounts + `dev` targets + polling envs for Windows file-watch). Pure prod: `docker compose -f docker-compose.yml up -d --build`.
+- Dashboard uses `output: 'standalone'` gated behind `DOCKER_BUILD=1` (set only in its Dockerfile) — standalone tracing creates symlinks, which fails with EPERM on Windows without Developer Mode.
+- Dashboard rewrites bake `NEXT_PUBLIC_API_URL` at **build** time → passed as a build `arg` (`http://api:4000`, the in-network name — localhost inside the container is wrong).
+- `prisma generate` runs in the deps stage so the generated client lands in the node_modules that runtime copies.
+- `.dockerignore` excludes `.env*` and `**/node_modules` — without it, secrets get baked into images and host (Windows) node_modules overwrite Linux ones.
+- Two compose networks isolate the DB tier: `backend` holds only api+postgres+redis; `frontend` holds bot+dashboard+api. Bot/dashboard have no route or DNS to the DB. In `docker-compose.yml` postgres/redis ports bind to `127.0.0.1` only; in `docker-compose.prod.yml` they publish no ports at all.
+- Docker Hub: images are tagged `phoenixdev100/discord-bot{,-api,-dashboard}:latest`. To publish manually: `docker compose -f docker-compose.yml build && docker compose -f docker-compose.yml push` (explicit `-f` skips the dev override — a bare `docker compose build`+`push` after dev mode would push `dev`-target images as `latest`). `docker-compose.prod.yml` is pull-only (`pull_policy: always`, no `build:`) and **fully self-contained** — no `.env` needed on the server; secrets live in the top `x-secrets` YAML anchor that merges into api/bot/dashboard via `<<: *secrets`. `docker compose -f docker-compose.prod.yml up -d` pulls and starts everything. Docker commands are run manually — no docker scripts in package.json.
+
 ## Gotchas discovered
 
 - Live Neon DB can cold-start → first connect may fail P1001, retry works.

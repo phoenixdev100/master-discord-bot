@@ -15,10 +15,7 @@
     "clean": "turbo run clean",
     "db:generate": "pnpm --filter @discord-platform/database db:generate",
     "db:migrate": "pnpm --filter @discord-platform/database db:migrate",
-    "db:studio": "pnpm --filter @discord-platform/database db:studio",
-    "docker:up": "docker-compose up -d",
-    "docker:down": "docker-compose down",
-    "docker:logs": "docker-compose logs -f"
+    "db:studio": "pnpm --filter @discord-platform/database db:studio"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^7.0.0",

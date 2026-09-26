@@ -1,0 +1,64 @@
+# Dev overrides — merged automatically by `docker compose up`.
+# Pure prod: docker compose -f docker-compose.yml up -d --build
+#
+# Each app switches to its Dockerfile's `dev` target (tsx watch / next dev)
+# and the repo is bind-mounted over /app so edits trigger reloads.
+# Anonymous volumes preserve the image's Linux node_modules — the bind
+# mount would otherwise hide them behind the host's Windows copies.
+#
+# Windows: file watching across bind mounts needs polling, hence
+# CHOKIDAR_USEPOLLING (tsx watch) and WATCHPACK_POLLING (next dev).
+# If deps change, refresh the seeded volumes with `docker compose up -V`.
+
+services:
+  api:
+    build:
+      target: dev
+    environment:
+      NODE_ENV: development
+      CHOKIDAR_USEPOLLING: "true"
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/apps/api/node_modules
+      - /app/apps/bot/node_modules
+      - /app/apps/dashboard/node_modules
+      - /app/packages/database/node_modules
+      - /app/packages/modules/node_modules
+      - /app/packages/permissions/node_modules
+      - /app/packages/shared/node_modules
+
+  bot:
+    build:
+      target: dev
+    environment:
+      NODE_ENV: development
+      CHOKIDAR_USEPOLLING: "true"
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/apps/api/node_modules
+      - /app/apps/bot/node_modules
+      - /app/apps/dashboard/node_modules
+      - /app/packages/database/node_modules
+      - /app/packages/modules/node_modules
+      - /app/packages/permissions/node_modules
+      - /app/packages/shared/node_modules
+
+  dashboard:
+    build:
+      target: dev
+    environment:
+      NODE_ENV: development
+      WATCHPACK_POLLING: "true"
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/apps/api/node_modules
+      - /app/apps/bot/node_modules
+      - /app/apps/dashboard/node_modules
+      - /app/apps/dashboard/.next
+      - /app/packages/database/node_modules
+      - /app/packages/modules/node_modules
+      - /app/packages/permissions/node_modules
+      - /app/packages/shared/node_modules
