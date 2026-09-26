@@ -16,9 +16,16 @@ const envSchema = z.object({
 
     // API Configuration
     API_URL: z.string().default('http://localhost:4000'),
+    INTERNAL_API_KEY: z.string().default(''),
 
     // Logging
     LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
+
+    // Command deployment strategy on boot:
+    // 'changed' — deploy only when command definitions differ (default)
+    // 'always'  — deploy on every boot
+    // 'never'   — never auto-deploy
+    DEPLOY_COMMANDS: z.enum(['always', 'changed', 'never']).default('changed'),
 });
 
 export type Env = z.infer<typeof envSchema>;

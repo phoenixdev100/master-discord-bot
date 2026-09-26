@@ -1,53 +1,48 @@
 /**
  * Memory Command
- * 
- * AI memory settings
+ *
+ * Per-user AI memory for /ai chat — remembers your conversation
+ * so follow-ups have context. In-memory (resets on bot restart).
  */
 
-import { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits, MessageFlags } from 'discord.js';
+import { SlashCommandBuilder, MessageFlags } from 'discord.js';
 import type { Command } from '../../types/command';
+import { getMemory, clearMemory } from '../../utils/ai';
 
 export const memory: Command = {
     data: new SlashCommandBuilder()
         .setName('memory')
-        .setDescription('AI memory settings')
-        .setDefaultMemberPermissions(PermissionFlagsBits.SendMessages)
+        .setDescription('AI chat memory settings')
         .setDMPermission(false)
-        .addSubcommand(subcommand =>
-            subcommand
-                .setName('enable')
-                .setDescription('Enable memory')
-        )
-        .addSubcommand(subcommand =>
-            subcommand
-                .setName('disable')
-                .setDescription('Disable memory')
-        )
-        .addSubcommand(subcommand =>
-            subcommand
-                .setName('clear')
-                .setDescription('Clear memory')
-        ),
+        .addSubcommand(subcommand => subcommand.setName('enable').setDescription('Remember your chat context'))
+        .addSubcommand(subcommand => subcommand.setName('disable').setDescription('Stop remembering'))
+        .addSubcommand(subcommand => subcommand.setName('clear').setDescription('Wipe your chat memory')),
     category: 'ai',
 
     async execute(interaction) {
         if (!interaction.guild) return;
 
-        try {
-            const embed = new EmbedBuilder()
-                .setColor('#5865F2')
-                .setTitle('🚧 Command In Development')
-                .setDescription(`This command is currently being developed!\n\n**Command:** \`/memory\`\n**Category:** ai\n\nCheck back soon for updates!`)
-                .setFooter({ text: 'Coming soon!' })
-                .setTimestamp();
+        const sub = interaction.options.getSubcommand();
+        const userId = interaction.user.id;
 
-            await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
-        } catch (error: any) {
-            console.error('memory command error:', error);
+        if (sub === 'enable') {
+            getMemory(userId).enabled = true;
             await interaction.reply({
-                content: '❌ An error occurred while executing this command',
-                flags: MessageFlags.Ephemeral
+                content: '🧠 **AI memory enabled** — `/ai chat` will now remember your conversation (last 10 messages). Use `/memory clear` anytime to wipe it.',
+                flags: MessageFlags.Ephemeral,
+            });
+        } else if (sub === 'disable') {
+            getMemory(userId).enabled = false;
+            await interaction.reply({
+                content: '🧠 **AI memory disabled** — each `/ai chat` is now a fresh conversation.',
+                flags: MessageFlags.Ephemeral,
+            });
+        } else if (sub === 'clear') {
+            clearMemory(userId);
+            await interaction.reply({
+                content: '🧹 **Memory cleared** — your AI conversation history is gone.',
+                flags: MessageFlags.Ephemeral,
             });
         }
-    }
+    },
 };

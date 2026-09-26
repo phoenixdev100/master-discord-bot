@@ -7,6 +7,128 @@
 import { Message, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 import type { BotClient } from '../client';
 import logger from '../config/logger';
+import { apiClient } from '../utils/api-client';
+
+// Per-guild XP cooldowns and module status cache
+const xpCooldowns = new Map<string, number>();
+const moduleCache = new Map<string, { enabled: boolean; checkedAt: number }>();
+const XP_COOLDOWN_MS = 60_000;
+const MODULE_CACHE_TTL_MS = 300_000;
+
+interface AfkRecord {
+    reason: string;
+    since: string;
+}
+
+async function isAfkModuleEnabled(guildId: string, now: number): Promise<boolean> {
+    const modKey = `${guildId}:afk`;
+    let mod = moduleCache.get(modKey);
+    if (!mod || now - mod.checkedAt > MODULE_CACHE_TTL_MS) {
+        const enabled = await apiClient.isModuleEnabled(guildId, 'afk');
+        mod = { enabled, checkedAt: now };
+        moduleCache.set(modKey, mod);
+    }
+    return mod.enabled;
+}
+
+function timeAgo(date: string): string {
+    const seconds = Math.floor((Date.now() - new Date(date).getTime()) / 1000);
+    if (seconds < 60) return 'just now';
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    return `${Math.floor(hours / 24)}d ago`;
+}
+
+/**
+ * AFK tracking: clears the author's AFK status when they speak,
+ * and notifies when someone pings an AFK member.
+ */
+async function handleAfk(message: Message): Promise<void> {
+    const guildId = message.guild!.id;
+    const userId = message.author.id;
+    const now = Date.now();
+
+    if (!(await isAfkModuleEnabled(guildId, now))) return;
+
+    // 1) Author spoke → clear their AFK status if set
+    try {
+        const res = await apiClient.get<{ data: { afk: AfkRecord | null } }>(
+            `/guilds/${guildId}/afk/${userId}`
+        );
+        if (res.data?.afk) {
+            await apiClient.delete(`/guilds/${guildId}/afk/${userId}`);
+            if (message.channel.isSendable()) {
+                await message.channel.send({
+                    content: `👋 Welcome back ${message.author}! I removed your AFK status.`,
+                }).catch(() => {});
+            }
+        }
+    } catch {
+        // AFK lookup failed — non-critical
+    }
+
+    // 2) Notify when mentioned users are AFK
+    const mentioned = [...message.mentions.users.values()].filter(u => !u.bot && u.id !== userId);
+    if (mentioned.length === 0) return;
+
+    const notices: string[] = [];
+    for (const user of mentioned.slice(0, 5)) {
+        try {
+            const res = await apiClient.get<{ data: { afk: AfkRecord | null } }>(
+                `/guilds/${guildId}/afk/${user.id}`
+            );
+            if (res.data?.afk) {
+                notices.push(`💤 **${user.username}** is AFK: ${res.data.afk.reason} — *${timeAgo(res.data.afk.since)}*`);
+            }
+        } catch {
+            // skip failed lookups
+        }
+    }
+
+    if (notices.length > 0 && message.channel.isSendable()) {
+        await message.channel.send({ content: notices.join('\n') }).catch(() => {});
+    }
+}
+
+interface XpResponse {
+    success?: boolean;
+    data?: { leveledUp?: boolean; newLevel?: number; xp?: number };
+}
+
+async function awardXp(message: Message): Promise<void> {
+    const guildId = message.guild!.id;
+    const userId = message.author.id;
+    const key = `${guildId}:${userId}`;
+
+    const now = Date.now();
+    const last = xpCooldowns.get(key) ?? 0;
+    if (now - last < XP_COOLDOWN_MS) return;
+    xpCooldowns.set(key, now);
+
+    // Check leveling module (cached)
+    const modKey = `${guildId}:leveling`;
+    let mod = moduleCache.get(modKey);
+    if (!mod || now - mod.checkedAt > MODULE_CACHE_TTL_MS) {
+        const enabled = await apiClient.isModuleEnabled(guildId, 'leveling');
+        mod = { enabled, checkedAt: now };
+        moduleCache.set(modKey, mod);
+    }
+    if (!mod.enabled) return;
+
+    const amount = 15 + Math.floor(Math.random() * 10); // 15-24 XP
+    const res = await apiClient.post<XpResponse>(
+        `/guilds/${guildId}/leveling/${userId}/xp`,
+        { amount }
+    );
+
+    if (res.data?.leveledUp && message.channel.isSendable()) {
+        await message.channel.send({
+            content: `🎉 ${message.author} leveled up to **level ${res.data.newLevel}**!`,
+        }).catch(() => {});
+    }
+}
 
 export async function handleMessageCreate(
     client: BotClient,
@@ -14,6 +136,12 @@ export async function handleMessageCreate(
 ): Promise<void> {
     // Ignore bot messages
     if (message.author.bot) return;
+
+    // Award XP + handle AFK for guild messages (fire-and-forget)
+    if (message.guild) {
+        awardXp(message).catch(() => {});
+        handleAfk(message).catch(() => {});
+    }
 
     // Check if bot is mentioned
     const botMention = `<@${client.user?.id}>`;

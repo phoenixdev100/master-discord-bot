@@ -1,44 +1,47 @@
 /**
- * Aiimage Command
- * 
- * Generate AI image
+ * AIImage Command
+ *
+ * Generate an AI image from a text prompt (Pollinations — free, no key).
  */
 
-import { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits, MessageFlags } from 'discord.js';
+import { SlashCommandBuilder, EmbedBuilder, AttachmentBuilder } from 'discord.js';
 import type { Command } from '../../types/command';
+import { aiImage } from '../../utils/ai';
 
-export const aiimage: Command = {
+export const image: Command = {
     data: new SlashCommandBuilder()
         .setName('aiimage')
         .setDescription('Generate AI image')
-        .setDefaultMemberPermissions(PermissionFlagsBits.SendMessages)
         .setDMPermission(false)
         .addStringOption(option =>
-            option
-                .setName('prompt')
-                .setDescription('Image description')
-                .setRequired(true)
+            option.setName('prompt').setDescription('Image description').setRequired(true).setMaxLength(500)
         ),
     category: 'ai',
 
     async execute(interaction) {
         if (!interaction.guild) return;
 
+        const prompt = interaction.options.getString('prompt', true);
+        await interaction.deferReply();
+
         try {
+            // Generation takes 5–30s — download it ourselves and upload as
+            // an attachment (Discord's image proxy times out on embed URLs)
+            const imageBuffer = await aiImage(prompt);
+            const attachment = new AttachmentBuilder(imageBuffer, { name: 'ai-image.png' });
+
             const embed = new EmbedBuilder()
-                .setColor('#5865F2')
-                .setTitle('🚧 Command In Development')
-                .setDescription(`This command is currently being developed!\n\n**Command:** \`/aiimage\`\n**Category:** ai\n\nCheck back soon for updates!`)
-                .setFooter({ text: 'Coming soon!' })
+                .setColor(0x9b59b6)
+                .setTitle('🎨 AI Image')
+                .setDescription(`> ${prompt}`)
+                .setImage('attachment://ai-image.png')
+                .setFooter({ text: `Generated for ${interaction.user.tag}`, iconURL: interaction.user.displayAvatarURL() })
                 .setTimestamp();
 
-            await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+            await interaction.editReply({ embeds: [embed], files: [attachment] });
         } catch (error: any) {
-            console.error('aiimage command error:', error);
-            await interaction.reply({
-                content: '❌ An error occurred while executing this command',
-                flags: MessageFlags.Ephemeral
-            });
+            console.error('aiimage error:', error);
+            await interaction.editReply({ content: `❌ Image generation failed: ${error.message ?? 'Unknown error'}` });
         }
-    }
+    },
 };

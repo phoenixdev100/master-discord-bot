@@ -95,6 +95,7 @@ export const command: Command = {
                 `/guilds/${interaction.guild.id}/moderation/mute`,
                 {
                     userId: user.id,
+                    moderatorId: interaction.user.id,
                     reason,
                     duration: durationSeconds,
                 }

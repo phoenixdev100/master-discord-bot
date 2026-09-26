@@ -59,26 +59,68 @@ export const ticket: Command = {
             if (subcommand === 'create') {
                 const subject = interaction.options.getString('subject', true);
 
-                const response = await apiClient.post(
+                await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+                // Create the ticket channel (bot-side — the API can't create channels)
+                let category = interaction.guild.channels.cache.find(
+                    c => c.type === ChannelType.GuildCategory && c.name.toLowerCase() === 'tickets'
+                );
+
+                if (!category) {
+                    category = await interaction.guild.channels.create({
+                        name: 'Tickets',
+                        type: ChannelType.GuildCategory,
+                    });
+                }
+
+                const ticketChannel = await interaction.guild.channels.create({
+                    name: `ticket-${interaction.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, ''),
+                    type: ChannelType.GuildText,
+                    parent: category.id,
+                    permissionOverwrites: [
+                        {
+                            id: interaction.guild.roles.everyone.id,
+                            deny: ['ViewChannel'],
+                        },
+                        {
+                            id: interaction.user.id,
+                            allow: ['ViewChannel', 'SendMessages', 'ReadMessageHistory'],
+                        },
+                        {
+                            id: interaction.client.user.id,
+                            allow: ['ViewChannel', 'SendMessages', 'ManageChannels'],
+                        },
+                    ],
+                });
+
+                // Persist the ticket via the API
+                await apiClient.post(
                     `/guilds/${interaction.guild.id}/tickets`,
                     {
+                        channelId: ticketChannel.id,
                         userId: interaction.user.id,
                         subject
                     }
                 );
 
-                const responseData = response as { data?: { channelId: string } };
-                const { channelId = '' } = responseData.data || {};
+                // Welcome message inside the ticket channel
+                const ticketEmbed = new EmbedBuilder()
+                    .setColor('#5865F2')
+                    .setTitle('🎫 Support Ticket')
+                    .setDescription(`**Subject:** ${subject}\n\n${interaction.user}, a staff member will assist you shortly.\nUse \`/ticket close\` when your issue is resolved.`)
+                    .setTimestamp();
+
+                await ticketChannel.send({ content: `${interaction.user}`, embeds: [ticketEmbed] });
 
                 const embed = new EmbedBuilder()
                     .setColor('#2ECC71')
                     .setTitle('🎫 Ticket Created!')
-                    .setDescription(`Your ticket has been created: <#${channelId}>`)
+                    .setDescription(`Your ticket has been created: ${ticketChannel}`)
                     .addFields({ name: 'Subject', value: subject })
                     .setFooter({ text: 'A staff member will assist you shortly' })
                     .setTimestamp();
 
-                await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+                await interaction.editReply({ embeds: [embed] });
 
             } else if (subcommand === 'close') {
                 const reason = interaction.options.getString('reason') || 'No reason provided';
@@ -152,10 +194,12 @@ export const ticket: Command = {
                 });
             }
         } catch (error: any) {
-            await interaction.reply({
-                content: error.response?.data?.message || 'Failed to process ticket command!',
-                flags: MessageFlags.Ephemeral
-            });
+            const content = '❌ ' + (error.response?.data?.error || error.response?.data?.message || 'Failed to process ticket command!');
+            if (interaction.deferred) {
+                await interaction.editReply({ content });
+            } else {
+                await interaction.reply({ content, flags: MessageFlags.Ephemeral });
+            }
         }
     },
 };

@@ -5,9 +5,74 @@
  */
 
 import { REST, Routes } from 'discord.js';
+import { createHash } from 'crypto';
+import { readFileSync, writeFileSync } from 'fs';
+import { join } from 'path';
 import type { BotClient } from '../client';
 import { env } from '../config/env';
 import logger from '../config/logger';
+
+// Hash file lives next to the bot package root (gitignored)
+const HASH_FILE = join(__dirname, '..', '..', '.deploy-hash');
+
+/**
+ * Stable fingerprint of the deployable command set.
+ * Only the first 100 commands actually get deployed (Discord limit),
+ * so the hash covers exactly what would be sent.
+ */
+function computeCommandsHash(client: BotClient): string {
+    const sorted = sortCommandsForDeploy(client);
+    const payload = sorted.slice(0, 100).map((cmd) => cmd.data.toJSON());
+    return createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+}
+
+export function hasCommandsChanged(client: BotClient): boolean {
+    try {
+        const stored = readFileSync(HASH_FILE, 'utf-8').trim();
+        return stored !== computeCommandsHash(client);
+    } catch {
+        return true; // no stored hash → first deploy
+    }
+}
+
+export function saveCommandsHash(client: BotClient): void {
+    try {
+        writeFileSync(HASH_FILE, computeCommandsHash(client), 'utf-8');
+    } catch (error) {
+        logger.warn({ error }, 'Failed to save deploy hash');
+    }
+}
+
+/** Implemented commands first, then stubs — then category priority. */
+function sortCommandsForDeploy(client: BotClient) {
+    const allCommands = Array.from(client.commands.values());
+
+    // Priority categories (most important first)
+    const priorityOrder = [
+        'moderation', 'automod', 'security', 'tickets', 'setup', 'utility',
+        'admin', 'logs', 'economy', 'leveling', 'community', 'fun',
+        'games', 'music', 'ai', 'giveaway', 'suggestions', 'voice',
+        'events', 'search', 'social', 'emoji', 'image', 'starboard',
+        'afk', 'birthday', 'analytics', 'applications', 'autoresponder',
+        'confessions', 'counting', 'customcommands', 'invites', 'marriage',
+        'notifications', 'pets', 'qotd', 'reports', 'stats',
+        'stickymessages', 'tags', 'tempvoice', 'translation', 'dev'
+    ];
+
+    return allCommands.sort((a, b) => {
+        const aStub = isStubCommand(a);
+        const bStub = isStubCommand(b);
+        if (aStub !== bStub) return aStub ? 1 : -1;
+
+        const aPriority = priorityOrder.indexOf(getCategoryFromCommand(a));
+        const bPriority = priorityOrder.indexOf(getCategoryFromCommand(b));
+
+        if (aPriority !== -1 && bPriority !== -1) return aPriority - bPriority;
+        if (aPriority !== -1) return -1;
+        if (bPriority !== -1) return 1;
+        return 0;
+    });
+}
 
 export async function deployCommands(client: BotClient): Promise<void> {
     const rest = new REST({ version: '10' }).setToken(env.DISCORD_BOT_TOKEN);
@@ -41,37 +106,10 @@ export async function deployGuildCommands(
 ): Promise<void> {
     const rest = new REST({ version: '10' }).setToken(env.DISCORD_BOT_TOKEN);
 
-    // Priority categories (most important first)
-    const priorityOrder = [
-        'moderation', 'setup', 'utility', 'admin', 'logs',
-        'economy', 'leveling', 'community', 'games', 'fun',
-        'music', 'ai', 'giveaway', 'tickets', 'suggestions',
-        'voice', 'events', 'search', 'social', 'emoji',
-        'image', 'starboard', 'afk', 'birthday', 'analytics', 'automod'
-    ];
-
-    // Get all commands with their categories
+    // Implemented commands always deploy before stubs — see
+    // sortCommandsForDeploy for the shared ordering.
     const allCommands = Array.from(client.commands.values());
-
-    // Sort commands by priority
-    const sortedCommands = allCommands.sort((a, b) => {
-        // Determine category from file path or command name
-        const aCat = getCategoryFromCommand(a);
-        const bCat = getCategoryFromCommand(b);
-
-        const aPriority = priorityOrder.indexOf(aCat);
-        const bPriority = priorityOrder.indexOf(bCat);
-
-        // If both in priority list, sort by priority
-        if (aPriority !== -1 && bPriority !== -1) {
-            return aPriority - bPriority;
-        }
-        // If only one in priority list, prioritize it
-        if (aPriority !== -1) return -1;
-        if (bPriority !== -1) return 1;
-        // Otherwise maintain order
-        return 0;
-    });
+    const sortedCommands = sortCommandsForDeploy(client);
 
     // Take only first 100 commands
     const commandsToDeploy = sortedCommands.slice(0, 100);
@@ -102,6 +140,18 @@ export async function deployGuildCommands(
     } catch (error) {
         logger.error({ error, guildId }, 'Failed to deploy guild commands');
         throw error;
+    }
+}
+
+/**
+ * Detects placeholder commands whose execute body is the standard
+ * "Command In Development" stub template.
+ */
+function isStubCommand(cmd: any): boolean {
+    try {
+        return cmd.execute?.toString().includes('Command In Development') ?? false;
+    } catch {
+        return false;
     }
 }
 

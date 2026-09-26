@@ -64,11 +64,11 @@ export const timeout: Command = {
             const timeoutUntil = new Date(Date.now() + duration * 60 * 1000);
             await member.timeout(duration * 60 * 1000, reason);
 
-            // Log to API
+            // Log to API (duration is stored in seconds)
             await apiClient.post(`/guilds/${interaction.guild.id}/moderation/timeout`, {
                 userId: targetUser.id,
                 moderatorId: interaction.user.id,
-                duration,
+                duration: duration * 60,
                 reason
             });
 

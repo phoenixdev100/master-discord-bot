@@ -48,26 +48,6 @@ export const remind: Command = {
                 .setTimestamp();
 
             await interaction.reply({ embeds: [embed] });
-
-            // Set timeout to send reminder
-            setTimeout(async () => {
-                try {
-                    const reminderEmbed = new EmbedBuilder()
-                        .setColor('#F39C12')
-                        .setTitle('⏰ Reminder!')
-                        .setDescription(message)
-                        .setFooter({ text: `Reminder from ${timeInMinutes} minutes ago` })
-                        .setTimestamp();
-
-                    await interaction.followUp({
-                        content: `${interaction.user}`,
-                        embeds: [reminderEmbed]
-                    });
-                } catch (error) {
-                    console.error('Failed to send reminder:', error);
-                }
-            }, timeInMinutes * 60 * 1000);
-
         } catch (error) {
             await interaction.reply({
                 content: '❌ Failed to set reminder!',

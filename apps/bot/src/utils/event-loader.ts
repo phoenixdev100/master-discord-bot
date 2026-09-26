@@ -11,18 +11,29 @@ import logger from '../config/logger';
 import { handleReady } from '../events/ready';
 import { handleGuildCreate } from '../events/guildCreate';
 import { handleGuildDelete } from '../events/guildDelete';
+import { handleGuildMemberAdd } from '../events/guildMemberAdd';
 import { handleInteractionCreate } from '../events/interactionCreate';
 import { handleMessageCreate } from '../events/messageCreate';
+import { handleMessageReactionAdd, handleMessageReactionRemove } from '../events/messageReactionAdd';
 import { handleError } from '../events/error';
 import { handleWarn } from '../events/warn';
 
 export function loadEvents(client: BotClient): void {
     // Ready event
-    client.once('ready', () => handleReady(client));
+    client.once('clientReady', () => handleReady(client));
 
     // Guild events
     client.on('guildCreate', (guild) => handleGuildCreate(client, guild));
     client.on('guildDelete', (guild) => handleGuildDelete(client, guild));
+    client.on('guildMemberAdd', (member) => handleGuildMemberAdd(client, member));
+
+    // Reaction role events
+    client.on('messageReactionAdd', (reaction, user) =>
+        handleMessageReactionAdd(client, reaction, user)
+    );
+    client.on('messageReactionRemove', (reaction, user) =>
+        handleMessageReactionRemove(client, reaction, user)
+    );
 
     // Interaction events
     client.on('interactionCreate', (interaction) =>

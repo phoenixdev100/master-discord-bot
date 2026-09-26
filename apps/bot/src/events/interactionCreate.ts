@@ -8,6 +8,7 @@ import type { Interaction } from 'discord.js';
 import type { BotClient } from '../client';
 import logger from '../config/logger';
 import { apiClient } from '../utils/api-client';
+import { getAdminRoleId } from '../utils/admin-role';
 
 export async function handleInteractionCreate(
     client: BotClient,
@@ -53,6 +54,27 @@ export async function handleInteractionCreate(
             } catch (error) {
                 // If API is unavailable, allow command to execute
                 logger.warn({ error, category: command.category }, 'Failed to check module status, allowing command');
+            }
+        }
+
+        // Permission check: requiredPermission is enforced manually so the
+        // guild's dashboard-assigned admin role also grants access.
+        if (command.requiredPermission) {
+            const hasPerm = interaction.memberPermissions?.has(command.requiredPermission as any) ?? false;
+            if (!hasPerm) {
+                const adminRoleId = await getAdminRoleId(interaction.guildId);
+                const memberRoles = (interaction.member as any)?.roles;
+                const hasAdminRole = adminRoleId
+                    ? (memberRoles?.cache?.has?.(adminRoleId) ?? (Array.isArray(memberRoles) && memberRoles.includes(adminRoleId)))
+                    : false;
+
+                if (!hasAdminRole) {
+                    await interaction.reply({
+                        content: '❌ You need the required permission — or the server\'s configured admin role — to use this command.',
+                        ephemeral: true,
+                    });
+                    return;
+                }
             }
         }
 

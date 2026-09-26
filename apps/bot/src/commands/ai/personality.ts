@@ -1,44 +1,41 @@
 /**
  * Personality Command
- * 
- * Set AI personality
+ *
+ * Set the personality the AI uses when chatting with you.
  */
 
-import { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits, MessageFlags } from 'discord.js';
+import { SlashCommandBuilder, MessageFlags } from 'discord.js';
 import type { Command } from '../../types/command';
+import { getMemory, personalityKeys } from '../../utils/ai';
 
 export const personality: Command = {
     data: new SlashCommandBuilder()
         .setName('personality')
-        .setDescription('Set AI personality')
-        .setDefaultMemberPermissions(PermissionFlagsBits.SendMessages)
+        .setDescription('Set your AI chat personality')
         .setDMPermission(false)
         .addStringOption(option =>
-            option
-                .setName('type')
-                .setDescription('Personality type')
-                .setRequired(true)
+            option.setName('type').setDescription('Personality type').setRequired(true)
+                .addChoices(...personalityKeys().map(k => ({ name: k[0].toUpperCase() + k.slice(1), value: k })))
         ),
     category: 'ai',
 
     async execute(interaction) {
         if (!interaction.guild) return;
 
-        try {
-            const embed = new EmbedBuilder()
-                .setColor('#5865F2')
-                .setTitle('🚧 Command In Development')
-                .setDescription(`This command is currently being developed!\n\n**Command:** \`/personality\`\n**Category:** ai\n\nCheck back soon for updates!`)
-                .setFooter({ text: 'Coming soon!' })
-                .setTimestamp();
+        const type = interaction.options.getString('type', true);
+        getMemory(interaction.user.id).personality = type;
 
-            await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
-        } catch (error: any) {
-            console.error('personality command error:', error);
-            await interaction.reply({
-                content: '❌ An error occurred while executing this command',
-                flags: MessageFlags.Ephemeral
-            });
-        }
-    }
+        const previews: Record<string, string> = {
+            default: 'Balanced, helpful, friendly.',
+            professional: 'Formal, precise, structured.',
+            casual: 'Chill and relaxed, like a friend.',
+            funny: 'Witty — answers with humor.',
+            roast: 'Playfully roasts you while answering.',
+        };
+
+        await interaction.reply({
+            content: `🎭 Personality set to **${type}** — ${previews[type] ?? ''}\nTry it with \`/ai chat\`.`,
+            flags: MessageFlags.Ephemeral,
+        });
+    },
 };
